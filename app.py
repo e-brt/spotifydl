@@ -50,7 +50,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
-        self.resize(1100, 760)
+        self.resize(1100, 820)
         self.setMinimumSize(850, 600)
 
         self.config = load_config()
@@ -135,6 +135,10 @@ class MainWindow(QMainWindow):
         self.browse_button = QPushButton("Browse…")
         self.browse_button.clicked.connect(self._browse_destination)
         dest_row = QHBoxLayout()
+        # The row sits in its own widget: without this, the default layout
+        # margins make it taller than the other fields, and it is the one
+        # squeezed when the window is at its default size.
+        dest_row.setContentsMargins(0, 0, 0, 0)
         dest_row.addWidget(self.destination_edit, 1)
         dest_row.addWidget(self.browse_button)
         dest_widget = QWidget()
@@ -160,12 +164,19 @@ class MainWindow(QMainWindow):
             "Existing files below the selected bitrate are downloaded again."
         )
 
-        form.addRow("Profile name", self.name_edit)
-        form.addRow("Spotify playlist URL", self.url_edit)
-        form.addRow("Destination folder", dest_widget)
-        form.addRow("Audio format", self.format_combo)
-        form.addRow("Bitrate", self.bitrate_combo)
-        form.addRow("Download threads", self.threads_spin)
+        def add_row(text, field):
+            # QFormLayout places labels at the top of their row; giving each
+            # label its field's height centers the text on the field.
+            label = QLabel(text)
+            label.setMinimumHeight(field.sizeHint().height())
+            form.addRow(label, field)
+
+        add_row("Profile name", self.name_edit)
+        add_row("Spotify playlist URL", self.url_edit)
+        add_row("Destination folder", dest_widget)
+        add_row("Audio format", self.format_combo)
+        add_row("Bitrate", self.bitrate_combo)
+        add_row("Download threads", self.threads_spin)
         right_layout.addWidget(settings_group)
 
         info = QLabel("Profiles are saved locally. Keep the same destination folder to help spotDL skip existing tracks.")
