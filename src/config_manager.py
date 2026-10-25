@@ -17,10 +17,11 @@ _migrated = False
 
 
 def app_dir():
-    """Folder of the executable, or of app.py when running from source."""
+    """Folder of the executable, or the project folder (the parent of src\\)
+    when running from source."""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
+    return Path(__file__).resolve().parent.parent
 
 
 def config_dir():

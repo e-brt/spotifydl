@@ -9,22 +9,24 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import app  # noqa: E402
+import main_window  # noqa: E402
+import profiles  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
+from theme import THEMES  # noqa: E402
 
 FIELDS = ["name_edit", "url_edit", "destination_edit", "browse_button", "format_combo",
           "bitrate_combo", "threads_spin", "save_button", "start_button", "stop_button"]
 
-app.save_config = lambda config: None
+profiles.save_config = lambda config: None
 results = {}
 qt = QApplication([])
-for theme in app.THEMES:
-    app.load_config = lambda theme=theme: {"version": 1, "settings": {"theme": theme}, "profiles": [{
+for theme in THEMES:
+    main_window.load_config = lambda theme=theme: {"version": 1, "settings": {"theme": theme}, "profiles": [{
         "id": "a", "name": "Test", "url": "https://open.spotify.com/playlist/x",
         "destination": "C:/Music/Test", "threads": 1}]}
-    window = app.MainWindow()
+    window = main_window.MainWindow()
     window.setWindowOpacity(0.0)
     window.show()
     window.resize(100, 100)  # the window stops at its minimum size

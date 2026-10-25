@@ -3,8 +3,9 @@
 import unittest
 from pathlib import Path
 
-import app
 from helpers import AppTestCase
+
+import theme
 
 
 class ThemeTests(AppTestCase):
@@ -19,7 +20,7 @@ class ThemeTests(AppTestCase):
     def test_saved_theme_is_applied_at_startup(self):
         window = self.window_with({"theme": "light"})
         self.assertEqual(window.theme, "light")
-        self.assertIn(app.THEMES["light"]["window"], window.styleSheet())
+        self.assertIn(theme.THEMES["light"]["window"], window.styleSheet())
         self.assert_menu_checked(window, "light")
         self.assertTrue(window.theme_switch.isChecked())
         self.assertEqual(window.theme_switch._position, 1.0, "no animation at startup")
@@ -30,7 +31,7 @@ class ThemeTests(AppTestCase):
             with self.subTest(settings=settings):
                 window = self.window_with(settings)
                 self.assertEqual(window.theme, "dark")
-                self.assertIn(app.THEMES["dark"]["window"], window.styleSheet())
+                self.assertIn(theme.THEMES["dark"]["window"], window.styleSheet())
                 self.assert_menu_checked(window, "dark")
 
     def test_switch_changes_and_saves_the_theme(self):
@@ -80,7 +81,7 @@ class ThemeTests(AppTestCase):
         window = self.window_with({"theme": "dark"})
         window.theme_switch.click()
         names = sorted(path.name for path in Path(window._arrow_dir.path()).iterdir())
-        colors = {app.THEMES[name]["arrow"].lstrip("#") for name in app.THEMES}
+        colors = {theme.THEMES[name]["arrow"].lstrip("#") for name in theme.THEMES}
         self.assertEqual(names, sorted(f"arrow_{kind}_{color}.png" for kind in ("down", "up") for color in colors))
 
 

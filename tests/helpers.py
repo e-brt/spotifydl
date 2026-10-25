@@ -17,10 +17,13 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
-import app  # noqa: E402
+import downloads  # noqa: E402
+import main_window  # noqa: E402
+import profiles  # noqa: E402
 from PySide6.QtCore import QProcess  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
@@ -69,9 +72,9 @@ class AppTestCase(unittest.TestCase):
                 super().start(sys.executable, [str(FAKE_WORKER), test.mode])
 
         for target, attribute, value in [
-            (app, "load_config", lambda: self.config),
-            (app, "save_config", lambda config: self.saved_configs.append(config)),
-            (app, "QProcess", FakeWorkerProcess),
+            (main_window, "load_config", lambda: self.config),
+            (profiles, "save_config", lambda config: self.saved_configs.append(config)),
+            (downloads, "QProcess", FakeWorkerProcess),
             (QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)),
         ]:
             patcher = mock.patch.object(target, attribute, value)
@@ -88,7 +91,7 @@ class AppTestCase(unittest.TestCase):
         self._tmp.cleanup()
 
     def make_window(self):
-        window = app.MainWindow()
+        window = main_window.MainWindow()
         self.windows.append(window)
         return window
 

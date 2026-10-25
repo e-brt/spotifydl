@@ -59,8 +59,20 @@ In Command Prompt, use `.venv\Scripts\activate.bat` instead.
 ## Run from source
 
 ```powershell
-python app.py
+python src\main.py
 ```
+
+The code is in `src\`:
+
+| File | Contents |
+|---|---|
+| `main.py` | entry point: the window, or the worker (`--spotdl-worker`) or the build check (`--self-check`) |
+| `main_window.py` | the window: layout, menus, theme, About, closing |
+| `profiles.py` | playlist profiles: list, form, create, duplicate, delete, save |
+| `downloads.py` | starting and stopping the worker, logs, progress, removal of a track left incomplete by Stop |
+| `worker.py` | the spotDL worker process: checking existing files, downloads, fixes applied to spotDL |
+| `theme.py`, `widgets.py` | color themes and stylesheet, sun/moon switch |
+| `config_manager.py`, `process_control.py`, `resources.py`, `version.py` | configuration, Windows process tree, bundled files, version |
 
 ## Run the tests
 
@@ -82,7 +94,7 @@ SpotifyDownloader\
 └── docs\          LICENSE, CHANGELOG.md, THIRD_PARTY_NOTICES.md and licenses\
 ```
 
-The application stores `config.json` in `data\`, next to the executable, or next to `app.py` when running from source. Files left next to the executable by an earlier build are moved to `data\` on the next start; a file already in `data\` is never overwritten.
+The application stores `config.json` in `data\`, next to the executable, or in the project folder when running from source. Files left next to the executable by an earlier build are moved to `data\` on the next start; a file already in `data\` is never overwritten.
 
 Make sure the application folder is writable. If it is installed under a protected location such as `C:\Program Files`, Windows may prevent saving the configuration. Prefer a user-writable folder, such as a folder under Documents.
 
@@ -100,7 +112,7 @@ From the project directory:
 
 If PowerShell blocks the script, run `powershell -ExecutionPolicy Bypass -File .\build.ps1` instead. The script uses `venv\` or `.venv\` (or the interpreter given with `-Python`) and:
 
-1. reads the version from `version.py` and checks that `CHANGELOG.md` has a section for it;
+1. reads the version from `src\version.py` and checks that `CHANGELOG.md` has a section for it;
 2. downloads or checks the vendor executables with `fetch_vendor.ps1`;
 3. checks that the installed packages match `requirements.txt`, then runs the tests (`-SkipTests` skips them);
 4. keeps `data\config.json` and `data\spotify_cache.json` from the previous build, which PyInstaller would otherwise delete, and puts them back after the build (a copy is left in the temp folder if the build fails);
@@ -117,7 +129,7 @@ dist\SpotifyDownloader\SpotifyDownloader.exe
 
 ## Publish a release
 
-1. Set the new version in `version.py`, following [Semantic Versioning](https://semver.org/).
+1. Set the new version in `src\version.py`, following [Semantic Versioning](https://semver.org/).
 2. In `CHANGELOG.md`, move the entries of `[Unreleased]` to a new `## [X.Y.Z] - YYYY-MM-DD` section.
 3. Commit, then create and push a matching tag:
 
@@ -126,9 +138,9 @@ dist\SpotifyDownloader\SpotifyDownloader.exe
    git push origin vX.Y.Z
    ```
 
-The `Release` GitHub Actions workflow (`.github/workflows/release.yml`) then builds on Windows with `build.ps1 -Package`, checks that the tag matches `version.py`, and publishes a GitHub Release with the zip, its SHA-256 and the changelog section as release notes. The workflow can also be run by hand from the Actions tab: it then only builds the archive and keeps it as a downloadable artifact.
+The `Release` GitHub Actions workflow (`.github/workflows/release.yml`) then builds on Windows with `build.ps1 -Package`, checks that the tag matches `src\version.py`, and publishes a GitHub Release with the zip, its SHA-256 and the changelog section as release notes. The workflow can also be run by hand from the Actions tab: it then only builds the archive and keeps it as a downloadable artifact.
 
-The GUI uses a child process to run spotDL and capture its output. The child process re-launches the packaged executable in worker mode, so do not remove the worker dispatch in `app.py`.
+The GUI uses a child process to run spotDL and capture its output. The child process re-launches the packaged executable in worker mode, so do not remove the worker dispatch in `src\main.py`.
 
 ## Troubleshooting
 
@@ -136,7 +148,7 @@ The GUI uses a child process to run spotDL and capture its output. The child pro
 - **YouTube HTTP 403 or rate limiting:** these are external-source or extractor errors rather than necessarily build errors. Wait before retrying and consider using fewer threads.
 - **Profiles missing after a rebuild:** build with `build.ps1`, which keeps `config.json`; a build run by hand with `--clean` deletes the output folder and the files in it.
 - **Build fails at the self-check:** a module is missing from the build, or an installed package no longer matches what the worker patches. Reinstall with `python -m pip install -r requirements.txt`.
-- **Worker fails to start:** test with `python app.py` first and inspect the displayed logs.
+- **Worker fails to start:** test with `python src\main.py` first and inspect the displayed logs.
 
 ## Licensing and responsible use
 

@@ -6,7 +6,7 @@ import unittest
 
 from helpers import ROOT
 
-import app
+import main_window
 from version import __version__
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -22,7 +22,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn(f"## [{__version__}]", changelog)
 
     def test_version_is_shown_in_the_application(self):
-        self.assertIn(f"Version {__version__}", app.about_text())
+        self.assertIn(f"Version {__version__}", main_window.about_text())
 
     def test_license_and_notices_exist(self):
         self.assertIn("MIT License", (ROOT / "LICENSE").read_text(encoding="utf-8"))

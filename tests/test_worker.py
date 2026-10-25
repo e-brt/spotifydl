@@ -236,7 +236,7 @@ class SelfCheckTests(unittest.TestCase):
     def test_self_check_passes(self):
         # In a separate process: the self-check patches spotDL globally.
         result = subprocess.run(
-            [sys.executable, str(ROOT / "app.py"), "--self-check"],
+            [sys.executable, str(ROOT / "src" / "main.py"), "--self-check"],
             capture_output=True, text=True, timeout=120,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

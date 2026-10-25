@@ -6,3 +6,7 @@ CHANGELOG.md by build.ps1. Follows Semantic Versioning (MAJOR.MINOR.PATCH).
 """
 
 __version__ = "1.0.0"
+
+if __name__ == "__main__":
+    # `python src/version.py` prints the version, for build.ps1 and the workflow.
+    print(__version__)

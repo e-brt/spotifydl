@@ -7,8 +7,9 @@ import sys
 import unittest
 from pathlib import Path
 
-import app
-from helpers import ROOT  # noqa: F401  (puts the project on sys.path)
+from helpers import ROOT  # noqa: F401  (puts src on sys.path)
+
+import main_window
 
 PROBE = Path(__file__).with_name("min_size_probe.py")
 
@@ -26,7 +27,7 @@ class MinimumSizeTests(unittest.TestCase):
         measures = json.loads(result.stdout.strip().splitlines()[-1])
         for theme, measure in measures.items():
             with self.subTest(theme=theme):
-                self.assertGreaterEqual(measure["width"], app.MIN_WINDOW_WIDTH)
+                self.assertGreaterEqual(measure["width"], main_window.MIN_WINDOW_WIDTH)
                 self.assertEqual(measure["squeezed"], {}, "field: [height, needed height]")
 
 

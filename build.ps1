@@ -3,7 +3,7 @@
     Builds dist\SpotifyDownloader\SpotifyDownloader.exe with PyInstaller.
 
 .DESCRIPTION
-    1. Reads the version from version.py and checks that CHANGELOG.md has a
+    1. Reads the version from src\version.py and checks that CHANGELOG.md has a
        section for it.
     2. Downloads or checks the vendor executables with fetch_vendor.ps1.
     3. Checks that the installed Python packages match requirements.txt, then
@@ -82,9 +82,9 @@ Write-Host "Python: $Python"
 
 # --- 1. Version -----------------------------------------------------------------
 Write-Step "Checking the version"
-$version = "$(& $Python -c 'from version import __version__; print(__version__)')".Trim()
+$version = "$(& $Python src\version.py)".Trim()
 if ($version -notmatch "^(\d+)\.(\d+)\.(\d+)([-+][0-9A-Za-z.-]+)?$") {
-    Stop-Build "version.py: '$version' is not a MAJOR.MINOR.PATCH version."
+    Stop-Build "src\version.py: '$version' is not a MAJOR.MINOR.PATCH version."
 }
 $fileVersion = @([int]$Matches[1], [int]$Matches[2], [int]$Matches[3], 0)
 $changelogHeading = "## [$version]"
@@ -205,7 +205,7 @@ foreach ($collected in $CollectAll) {
 foreach ($name in $VendorFiles) {
     $arguments += @("--add-binary", "vendor\$name;vendor")
 }
-$arguments += @("--add-data", "assets\spotifydownloader.ico;assets", "app.py")
+$arguments += @("--add-data", "assets\spotifydownloader.ico;assets", "src\main.py")
 
 $buildExitCode = 1
 try {
