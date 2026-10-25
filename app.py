@@ -86,10 +86,7 @@ class MainWindow(QMainWindow):
         title_box = QVBoxLayout()
         title = QLabel(APP_NAME)
         title.setObjectName("appTitle")
-        subtitle = QLabel("Manage playlist profiles and monitor spotDL downloads")
-        subtitle.setObjectName("subtitle")
         title_box.addWidget(title)
-        title_box.addWidget(subtitle)
         header.addLayout(title_box)
         header.addStretch()
         self.status_label = QLabel("Idle")
@@ -251,7 +248,7 @@ class MainWindow(QMainWindow):
             QMenuBar, QMenu { background: #1c2028; color: #e7eaf0; }
             QMenuBar::item:selected, QMenu::item:selected { background: #303746; }
             QLabel#appTitle { font-size: 22pt; font-weight: 700; color: #ffffff; }
-            QLabel#subtitle, QLabel#hint { color: #9ba5b5; }
+            QLabel#hint { color: #9ba5b5; }
             QLabel#statusPill { background: #263a32; color: #7fe0a5; padding: 7px 12px; border-radius: 10px; font-weight: 600; }
             QGroupBox { border: 1px solid #343a46; border-radius: 10px; margin-top: 12px; padding: 12px; font-weight: 600; }
             QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; color: #bfc8d8; }

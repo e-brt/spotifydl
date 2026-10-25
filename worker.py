@@ -14,8 +14,10 @@ import argparse
 import concurrent.futures
 import json
 import os
+import re
 import sys
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 
 # Threads used to fetch metadata and check existing files. Downloads use the
@@ -31,6 +33,15 @@ BITRATE_TOLERANCE = 0.9
 BITRATE_TOLERANCE_BY_FORMAT = {"opus": 0.65}
 # A file shorter than this fraction of the track is considered incomplete.
 MIN_DURATION_RATIO = 0.75
+# yt-dlp errors that concern one video only, so another search result may
+# work. Bot checks and rate limits are left out: they apply to every video.
+BLOCKED_VIDEO_ERRORS = re.compile(
+    r"confirm your age|age.restricted|video unavailable|not available in your country"
+    r"|private video|members.only|join this channel",
+    re.IGNORECASE,
+)
+# How many other search results to try after a blocked video.
+MAX_ALTERNATIVE_RESULTS = 3
 # Output lines starting with this prefix carry a JSON progress event for the
 # GUI instead of a log message.
 PROGRESS_PREFIX = "@@progress "
@@ -139,6 +150,112 @@ def share_spotify_web_session():
         shared(method, names)
 
 
+def video_id(url):
+    """Return the YouTube video id of a watch URL, or None."""
+    if not url:
+        return None
+    return parse_qs(urlparse(url).query).get("v", [None])[0]
+
+
+def skip_blocked_videos():
+    """Exclude videos that cannot be downloaded from later search results.
+
+    Some results are age restricted (or private, region locked...). This is
+    attached to the video itself, so music.youtube.com and youtube.com fail
+    alike. When yt-dlp reports such an error, the video id is recorded and
+    filtered out of YouTube Music results, so that searching again picks the
+    next best result. Returns the {video id: reason} dict that is filled in.
+    """
+    from spotdl.providers.audio.base import AudioProvider, AudioProviderError
+    from spotdl.providers.audio.ytmusic import YouTubeMusic
+
+    blocked = {}
+
+    original_metadata = AudioProvider.get_download_metadata
+
+    def get_download_metadata(self, url, download=False):
+        try:
+            return original_metadata(self, url, download=download)
+        except AudioProviderError as exc:
+            match = BLOCKED_VIDEO_ERRORS.search(str(exc.__cause__ or ""))
+            if match and video_id(url):
+                blocked[video_id(url)] = match.group(0).lower()
+            raise
+
+    AudioProvider.get_download_metadata = get_download_metadata
+
+    # To break ties between close results, spotDL reads every candidate's view
+    # count through yt-dlp, so a single blocked candidate made the whole search
+    # fail. Count it as 0 views instead; if it is still picked, the download
+    # fails and the track is retried without it.
+    original_views = AudioProvider.get_views
+
+    def get_views(self, url):
+        try:
+            return original_views(self, url)
+        except AudioProviderError:
+            if video_id(url) in blocked:
+                return 0
+            raise
+
+    AudioProvider.get_views = get_views
+
+    original_results = YouTubeMusic.get_results
+
+    def get_results(self, search_term, **kwargs):
+        results = original_results(self, search_term, **kwargs)
+        return [result for result in results if result.result_id not in blocked]
+
+    YouTubeMusic.get_results = get_results
+    return blocked
+
+
+def track_downloads(downloader, blocked_videos):
+    """Retry blocked videos with another result and report each download.
+
+    Patches the spotDL downloader instance: each track whose video turns out
+    to be blocked (see skip_blocked_videos) is searched and downloaded again,
+    up to MAX_ALTERNATIVE_RESULTS times, then a "track" progress event is
+    emitted; spotDL returns no path on failure.
+    """
+    # Remember which video each track was matched to.
+    searched_urls = {}
+    search = downloader.search
+
+    def tracked_search(song):
+        url = search(song)
+        searched_urls[song.url] = url
+        return url
+
+    downloader.search = tracked_search
+
+    search_and_download = downloader.async_search_and_download
+
+    async def tracked_search_and_download(song):
+        blocked_urls = []
+        for attempt in range(MAX_ALTERNATIVE_RESULTS + 1):
+            result_song, path = await search_and_download(song)
+            url = searched_urls.get(song.url)
+            reason = blocked_videos.get(video_id(url))
+            if path is not None or reason is None or attempt == MAX_ALTERNATIVE_RESULTS:
+                break
+            blocked_urls.append(url)
+            # Make spotDL search again rather than reuse the blocked video.
+            song.download_url = None
+            print(f"[Retry] {song.display_name}: {reason} ({url}), "
+                  f"trying another search result...", flush=True)
+        if path is not None and blocked_urls:
+            # Do not report the blocked attempts as errors at the end.
+            downloader.errors[:] = [
+                error for error in downloader.errors
+                if not any(blocked in error for blocked in blocked_urls)
+            ]
+        emit("track", ok=path is not None, name=result_song.display_name)
+        return result_song, path
+
+    downloader.async_search_and_download = tracked_search_and_download
+
+
 def bitrate_to_bps(bitrate):
     """Return "320k" as 320000, or None for "auto"."""
     if bitrate.endswith("k") and bitrate[:-1].isdigit():
@@ -193,6 +310,7 @@ def run(argv):
     hide_child_consoles()
     use_english_youtube_music()
     share_spotify_web_session()
+    blocked_videos = skip_blocked_videos()
 
     from spotdl.download.downloader import Downloader
     from spotdl.utils.arguments import parse_arguments
@@ -293,16 +411,7 @@ def run(argv):
     emit("total", total=len(songs), done=up_to_date)
 
     if to_download:
-        # Report each finished download; spotDL returns no path on failure.
-        search_and_download = downloader.async_search_and_download
-
-        async def tracked_search_and_download(song):
-            result_song, path = await search_and_download(song)
-            emit("track", ok=path is not None, name=result_song.display_name)
-            return result_song, path
-
-        downloader.async_search_and_download = tracked_search_and_download
-
+        track_downloads(downloader, blocked_videos)
         emit("phase", phase="downloading")
         print(f"[Download] Downloading {len(to_download)} tracks with "
               f"{settings['threads']} thread(s)...", flush=True)
