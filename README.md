@@ -52,6 +52,8 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 In Command Prompt, use `.venv\Scripts\activate.bat` instead.
 
+`requirements.txt` pins the exact version of every package. The worker patches internals of spotDL and some of its dependencies, so upgrade packages on purpose, run a download, then update the pins (see the comment at the top of `requirements.txt`).
+
 ## Run from source
 
 ```powershell
@@ -66,18 +68,28 @@ Make sure the application folder is writable. If it is installed under a protect
 
 Use **File → Show configuration location** in the app to display the full path. Back up `config.json` to preserve your saved profiles.
 
+`spotify_cache.json`, in the same folder, keeps Spotify track data between runs so that repeated downloads of the same playlist do not get rate limited by Spotify. It can be deleted at any time; it is rebuilt on the next run.
+
 ## Build a Windows executable
 
-Activate the virtual environment, ensure the three files are present in `vendor/`, and run:
+Ensure the three files are present in `vendor/`, then run from the project directory:
 
 ```powershell
-python -m PyInstaller --clean --noconfirm --windowed --icon "assets\spotifydownloader.ico" --name SpotifyDownloader --collect-all spotdl --collect-all yt_dlp --collect-all syncedlyrics --collect-all pykakasi --collect-all ytmusicapi --collect-all babel --add-binary "vendor\deno.exe;vendor" --add-binary "vendor\ffmpeg.exe;vendor" --add-binary "vendor\ffprobe.exe;vendor" --add-data "assets\spotifydownloader.ico;assets" app.py
+.\build.ps1
 ```
+
+If PowerShell blocks the script, run `powershell -ExecutionPolicy Bypass -File .\build.ps1` instead. The script uses `venv\` or `.venv\` (or the interpreter given with `-Python`) and:
+
+1. checks that `vendor\deno.exe`, `ffmpeg.exe` and `ffprobe.exe` exist and run;
+2. checks that the installed packages match `requirements.txt`;
+3. keeps `config.json` and `spotify_cache.json` from the previous build, which PyInstaller would otherwise delete, and puts them back after the build (a copy is left in the temp folder if the build fails);
+4. runs PyInstaller;
+5. checks the output and runs the packaged worker's self-check (`SpotifyDownloader.exe --self-check`), which imports spotDL and applies the worker patches without downloading anything.
 
 The executable is created at:
 
 ```text
-dist\SpotifyDownloader.exe
+dist\SpotifyDownloader\SpotifyDownloader.exe
 ```
 
 The GUI uses a child process to run spotDL and capture its output. The child process re-launches the packaged executable in worker mode, so do not remove the worker dispatch in `app.py`.
@@ -87,7 +99,8 @@ The GUI uses a child process to run spotDL and capture its output. The child pro
 - **Missing FFmpeg:** check that `vendor\ffmpeg.exe` exists and that the filename is exact.
 - **Missing Deno:** check `vendor\deno.exe`. Some spotDL features may require it.
 - **YouTube HTTP 403 or rate limiting:** these are external-source or extractor errors rather than necessarily build errors. Wait before retrying and consider using fewer threads.
-- **Profiles missing after an update:** check `%APPDATA%\SpotifyPlaylistDownloader\config.json`.
+- **Profiles missing after a rebuild:** build with `build.ps1`, which keeps `config.json`; a build run by hand with `--clean` deletes the output folder and the files in it.
+- **Build fails at the self-check:** a module is missing from the build, or an installed package no longer matches what the worker patches. Reinstall with `python -m pip install -r requirements.txt`.
 - **Worker fails to start:** test with `python app.py` first and inspect the displayed logs.
 
 ## Licensing and responsible use

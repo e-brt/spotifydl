@@ -406,6 +406,48 @@ def describe_mismatch(path, target_bps, track_seconds):
     return None
 
 
+def self_check():
+    """Import everything the worker needs and apply every patch, without any
+    network access. Used by build.ps1 to check a packaged build: it catches
+    modules missing from the build and spotDL internals that changed.
+    Returns a process exit code.
+    """
+    try:
+        from spotapi.client import BaseClient
+        from spotdl.download.downloader import Downloader
+        from spotdl.providers.audio.base import AudioProvider
+        from spotdl.providers.audio.ytmusic import YouTubeMusic
+        from spotdl.types.song import Song
+        import curl_cffi  # noqa: F401
+        import mutagen  # noqa: F401
+        import spotdl
+
+        # Everything patched here or used through the downloader instance.
+        expected = {
+            BaseClient: ["get_session", "get_client_token", "get_sha256_hash", "raw_hashes", "js_pack"],
+            AudioProvider: ["get_download_metadata", "get_views"],
+            YouTubeMusic: ["get_results", "_create_client"],
+            Downloader: ["search", "async_search_and_download", "download_multiple_songs"],
+            Song: ["from_url", "json"],
+        }
+        missing = [f"{owner.__name__}.{name}" for owner, names in expected.items()
+                   for name in names if not hasattr(owner, name)]
+        if missing:
+            print(f"Self-check FAILED: spotDL internals changed, missing: {', '.join(missing)}")
+            return 1
+
+        hide_child_consoles()
+        cache_spotify_lookups(SpotifyCache(Path("self-check-not-saved.json")))
+        use_english_youtube_music()
+        share_spotify_web_session()
+        skip_blocked_videos()
+    except Exception as exc:
+        print(f"Self-check FAILED: {type(exc).__name__}: {exc}")
+        return 1
+    print(f"Self-check OK (spotDL {spotdl.__version__})")
+    return 0
+
+
 def parse_options(argv):
     parser = argparse.ArgumentParser(prog="spotdl-worker")
     parser.add_argument("--url", required=True)

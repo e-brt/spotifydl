@@ -766,6 +766,10 @@ def main():
     if "--spotdl-worker" in sys.argv:
         run_spotdl_worker()
         return
+    if "--self-check" in sys.argv:
+        import worker
+
+        sys.exit(worker.self_check())
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
