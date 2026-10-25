@@ -9,6 +9,7 @@ A Windows GUI for managing saved Spotify playlist profiles and downloading track
 - View spotDL output live, with a progress bar and a track counter; Stop ends every process it started.
 - Check existing files before downloading, and download again those that are truncated or below the selected bitrate.
 - Use another search result when a YouTube video is age restricted or unavailable.
+- Keep the folder in sync with the playlist: a `.m3u8` playlist file in the playlist order, and an offer to move the tracks removed from the playlist to the Recycle Bin.
 - Light and dark themes.
 
 See `CHANGELOG.md` for the changes of each version. The current version is shown in the window title and in **Help → About**.

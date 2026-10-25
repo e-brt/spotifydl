@@ -43,6 +43,8 @@ class MainWindow(ProfilesMixin, DownloadsMixin, QMainWindow):
         # Processed tracks: up to date, downloaded or failed.
         self._progress = {"total": None, "done": 0, "failed": 0}
         self._failed_tracks = []
+        # Files the worker suggests moving to the Recycle Bin (cleanup event).
+        self._cleanup = {}
         # Arrow images used by the stylesheet, deleted when the window closes.
         self._arrow_dir = QTemporaryDir()
 

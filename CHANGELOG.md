@@ -9,6 +9,15 @@ version that has no section here.
 
 ## [Unreleased]
 
+### Added
+- A `.m3u8` playlist file is written in the destination folder after each
+  run, with the tracks in the playlist order.
+- After a complete run, files of tracks no longer in the playlist can be moved
+  to the Recycle Bin, after confirmation.
+
+### Changed
+- The code is in `src\`; run it from source with `python src\main.py`.
+
 ## [1.0.0] - 2026-10-25
 
 First release.

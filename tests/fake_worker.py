@@ -16,6 +16,11 @@ Progress events (see worker.emit):
 - early-exit: exits with code 3 before reporting the total.
 - empty: a playlist with no tracks.
 - split: one event is written in two parts.
+
+Clean-up:
+- cleanup: a complete run that reports "Old Track.mp3" (created in the
+  destination folder) as no longer in the playlist.
+- cleanup-none: a complete run with nothing to clean up.
 """
 
 import json
@@ -88,6 +93,19 @@ def run_progress():
         emit("track", ok=ok, name=f"Track {index}")
 
 
+def run_cleanup():
+    emit("total", total=1, done=1)
+    removed = []
+    if mode == "cleanup":
+        with open("Old Track.mp3", "wb") as old:
+            old.write(b"old")
+        removed = ["Old Track.mp3"]
+    emit("cleanup", removed=removed)
+
+
+if mode in ("cleanup", "cleanup-none"):
+    run_cleanup()
+    sys.exit(0)
 if mode == "quick-ok":
     print("done quickly")
     sys.exit(0)

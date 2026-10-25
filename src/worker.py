@@ -62,6 +62,9 @@ def emit(event, **data):
     - phase: phase="fetching" | "checking" (total=...) | "downloading"
     - total: total tracks and how many are already up to date ("done")
     - track: one download finished, ok=True/False, name=...
+    - cleanup: at the end of a complete run, files the user may want to move
+      to the Recycle Bin: removed=[...] (tracks no longer in the playlist),
+      paths relative to the destination folder
     """
     # A single write, so log lines from other threads cannot split the event.
     sys.stdout.write(PROGRESS_PREFIX + json.dumps({"event": event, **data}) + "\n")
@@ -375,6 +378,40 @@ def track_downloads(downloader, blocked_videos):
     downloader.async_search_and_download = tracked_search_and_download
 
 
+def playlist_file_name(list_name):
+    """File name of the .m3u8 playlist written in the destination folder."""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", list_name or "").strip(" .")
+    return f"{name or 'playlist'}.m3u8"
+
+
+def write_playlist_file(path, songs, files):
+    """Write an extended M3U playlist (UTF-8) of the songs, in playlist order.
+
+    files maps a song URL to its file, relative to the playlist's folder.
+    Songs without a file (not downloaded yet, or failed) are left out.
+    """
+    lines = ["#EXTM3U"]
+    for song in songs:
+        file = files.get(song.url)
+        if file is None or not (Path(path).parent / file).is_file():
+            continue
+        lines.append(f"#EXTINF:{int(song.duration or 0)},{song.display_name}")
+        lines.append(str(file))
+    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return (len(lines) - 1) // 2
+
+
+def find_removed_tracks(known_songs, songs):
+    """Files of known tracks (by the Spotify URL in their metadata) that are no
+    longer in the playlist, sorted."""
+    playlist_ids = {spotify_track_id(song.url) for song in songs}
+    removed = []
+    for url, paths in known_songs.items():
+        if spotify_track_id(url) not in playlist_ids:
+            removed.extend(path for path in paths if Path(path).is_file())
+    return sorted({Path(path) for path in removed}, key=lambda path: str(path).lower())
+
+
 def bitrate_to_bps(bitrate):
     """Return "320k" as 320000, or None for "auto"."""
     if bitrate.endswith("k") and bitrate[:-1].isdigit():
@@ -535,6 +572,10 @@ def run(argv):
     # Creating the downloader scans the destination for known tracks.
     downloader = Downloader(settings)
 
+    # File of each track in the destination, for the .m3u8 playlist: the
+    # expected name, or an existing file found through its metadata.
+    track_files = {}
+
     def check(song):
         output_file = create_file_name(
             song=song,
@@ -543,12 +584,14 @@ def run(argv):
             restrict=settings["restrict"],
             file_name_length=settings["max_filename_length"],
         )
+        track_files[song.url] = output_file
         candidates = [output_file] + downloader.known_songs.get(song.url, [])
         existing = [path for path in candidates if path.exists()]
         if not existing:
             return song, "missing", None
         reasons = [describe_mismatch(path, target_bps, song.duration) for path in existing]
         if None in reasons:
+            track_files[song.url] = existing[reasons.index(None)]
             return song, "ok", None
         return song, "redownload", reasons[0]
 
@@ -585,3 +628,15 @@ def run(argv):
         downloader.download_multiple_songs(to_download)
     downloader.progress_handler.close()
     spotify_cache.save()
+
+    # Downloaded tracks are at their expected name; a failed one has no file.
+    playlist_path = Path(playlist_file_name(songs[0].list_name if songs else None))
+    count = write_playlist_file(playlist_path, songs, track_files)
+    print(f"[Sync] Playlist file {playlist_path} written with {count} of {len(songs)} tracks.", flush=True)
+
+    removed = find_removed_tracks(downloader.known_songs, songs)
+    if removed:
+        print(f"[Sync] {len(removed)} file(s) in this folder are no longer in the playlist:", flush=True)
+        for path in removed:
+            print(f"  - {path}", flush=True)
+    emit("cleanup", removed=[str(path) for path in removed])

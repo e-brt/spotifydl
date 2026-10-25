@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QMessageBox
 
 from config_manager import DEFAULT_BITRATE, DEFAULT_FORMAT
 from process_control import ProcessTree, is_file_in_use
+from recycle_bin import move_to_recycle_bin
 from resources import resource_path
 from worker import LOSSLESS_FORMATS, PROGRESS_PREFIX
 
@@ -168,6 +169,7 @@ class DownloadsMixin:
             self.log_state.setText("Download finished")
             self.status_label.setText("Completed")
             self.logs.appendPlainText("[Application] Download process finished.")
+            self._offer_cleanup()
 
         else:
             self.log_state.setText(f"Finished with exit code {exit_code}")
@@ -183,6 +185,7 @@ class DownloadsMixin:
     def _reset_progress(self):
         self._progress = {"total": None, "done": 0, "failed": 0}
         self._failed_tracks = []
+        self._cleanup = {}
         # Indeterminate until the worker reports the number of tracks.
         self.progress_bar.setRange(0, 0)
         self.progress_label.setText("")
@@ -213,6 +216,8 @@ class DownloadsMixin:
                 progress["failed"] += 1
                 self._failed_tracks.append(str(event.get("name", "unknown track")))
             self._update_progress()
+        elif kind == "cleanup":
+            self._cleanup = event
 
     def _update_progress(self):
         total, done, failed = (self._progress[key] for key in ("total", "done", "failed"))
@@ -225,6 +230,43 @@ class DownloadsMixin:
         if failed:
             text += f" · {failed} failed"
         self.progress_label.setText(text)
+
+    def _offer_cleanup(self):
+        """After a complete run, offer to move the files of tracks no longer in
+        the playlist to the Recycle Bin. Nothing is moved without confirmation."""
+        removed = [str(path) for path in (self._cleanup or {}).get("removed") or []]
+        if not removed or self._download_destination is None:
+            return
+        files = [self._download_destination / path for path in removed]
+        if not self._confirm_cleanup(
+            "Tracks removed from the playlist",
+            f"{len(files)} file(s) in the destination folder are no longer in this playlist.",
+            "Move them to the Recycle Bin? You can restore them from there.",
+            removed,
+        ):
+            self.logs.appendPlainText(f"[Application] Kept {len(files)} file(s) no longer in the playlist.")
+            return
+        failed = move_to_recycle_bin(files)
+        self.logs.appendPlainText(
+            f"[Application] Moved {len(files) - len(failed)} file(s) to the Recycle Bin."
+        )
+        for path in failed:
+            self.logs.appendPlainText(f"[Application] Could not move to the Recycle Bin: {path}")
+
+    def _confirm_cleanup(self, title, text, question, names):
+        """Ask before moving files to the Recycle Bin; names are listed in the
+        details. Keep is the default answer."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(title)
+        box.setText(text)
+        box.setInformativeText(question)
+        box.setDetailedText("\n".join(names))
+        move_button = box.addButton("Move to Recycle Bin", QMessageBox.ButtonRole.AcceptRole)
+        keep_button = box.addButton("Keep", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep_button)
+        box.exec()
+        return box.clickedButton() is move_button
 
     def _end_progress(self):
         # Keep the last known progress; only stop an indeterminate animation.

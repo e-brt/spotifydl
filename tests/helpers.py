@@ -88,6 +88,14 @@ class AppTestCase(unittest.TestCase):
                 window.process.waitForFinished(5000)
             window._release_process_tree()
         self.wait(lambda: False, 0.3)
+        # Destroy the windows now, with their pending events handled, rather
+        # than whenever Python collects them: Qt could otherwise deliver an
+        # event to a window already destroyed, and crash the next test.
+        for window in self.windows:
+            window.hide()
+            window.deleteLater()
+        self.windows.clear()
+        self.wait(lambda: False, 0.2)
         self._tmp.cleanup()
 
     def make_window(self):
