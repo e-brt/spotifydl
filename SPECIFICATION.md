@@ -38,7 +38,7 @@ src\                 application code (run from source: python src\main.py)
   worker.py          the spotDL worker process
   theme.py, widgets.py, config_manager.py, process_control.py,
   recycle_bin.py, resources.py, version.py
-tests\               unittest suite (78 tests, about 65 s, no network)
+tests\               unittest suite (87 tests, about 80 s, no network)
 tools\               collect_licenses.py (build)
 assets\              application icon
 build.ps1            build, test and package
@@ -76,6 +76,19 @@ Start downloads the selected profile's playlist into its destination folder
 downloads what is missing or does not match the selected quality (section
 5.3). spotDL's live output is shown in the window, wrapped to its width, with
 rich's line padding removed.
+
+**Download all** downloads every profile in turn, in the list order; the
+profile being downloaded is selected in the list, and each run has its own
+saved log. The queue never waits for the user:
+- a profile that cannot be downloaded (invalid URL, no destination, missing
+  vendor executable, folder that cannot be created) is skipped with a
+  `[Download all] Skipped …` log line instead of a dialog;
+- a failed run does not stop the queue; Stop ends the current run and cancels
+  the remaining profiles;
+- the per-run notification and clean-up questions are kept for the end: one
+  notification with a summary (e.g. "3 profile(s): 2 completed, 1 skipped."),
+  then the clean-up questions of each completed profile, titled with its name;
+- Retry failed applies to the last profile downloaded.
 
 ### 3.3 Progress
 
@@ -321,11 +334,11 @@ archive never contains them.
 
 ### 7.2 Tests
 
-`python -m unittest discover -s tests`: 78 tests, about 65 s, no network. The
+`python -m unittest discover -s tests`: 87 tests, about 80 s, no network. The
 GUI tests run the real window with a fake worker (`tests\fake_worker.py`), an
 in-memory configuration and a temporary folder. They cover Stop and Close
 (Windows process tree, partial file), progress, end of run (retry,
-notification, clean-up offers, Recycle Bin calls), saved logs, themes, the minimum window
+notification, clean-up offers, Recycle Bin calls), Download all, saved logs, themes, the minimum window
 size (on the real Windows platform, with a transparent window), the
 configuration location and migration, the worker logic (blocked video retry,
 Spotify cache, quality check on files generated with FFmpeg, playlist file,
@@ -393,5 +406,4 @@ Python packages (`docs\licenses\python\SUMMARY.txt`).
 | P2 | Fill the genre metadata | e.g. from the artist's genres |
 | P2 | Lyrics | Check spotDL's lyrics providers; optional synced lyrics (`.lrc`) per profile |
 | P2 | Automatic sync | Headless mode (`SpotifyDownloader.exe --sync "<profile>"`) for the Windows Task Scheduler |
-| P2 | Download all profiles | One click to run every profile in turn |
 | P3 | Save each run's log | e.g. in `data\logs\` ||

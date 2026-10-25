@@ -17,7 +17,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from theme import THEMES  # noqa: E402
 
 FIELDS = ["name_edit", "url_edit", "destination_edit", "browse_button", "format_combo",
-          "bitrate_combo", "threads_spin", "save_button", "start_button", "stop_button"]
+          "bitrate_combo", "threads_spin", "save_button", "download_all_button", "start_button", "stop_button"]
 
 profiles.save_config = lambda config: None
 results = {}

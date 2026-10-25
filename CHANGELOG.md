@@ -12,6 +12,10 @@ version that has no section here.
 ### Added
 - Each run's log is saved in `data\logs\` (File → Open logs folder); the
   latest 100 are kept.
+- Download all: downloads every profile in turn. Profiles that cannot be
+  downloaded are skipped and logged, a failure does not stop the queue, Stop
+  cancels the rest, and clean-up questions and the notification come at the
+  end.
 
 ## [1.1.0] - 2026-10-25
 

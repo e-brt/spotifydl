@@ -51,6 +51,14 @@ class MainWindow(ProfilesMixin, DownloadsMixin, QMainWindow):
         self._retry_file = None
         # Notification area icon, created for the first notification.
         self._tray = None
+        # Download all: profile ids still to download (None when no queue
+        # runs), their number, (name, status) of each run, and the clean-up
+        # questions kept for the end of the queue.
+        self._queue = None
+        self._queue_total = 0
+        self._queue_results = []
+        self._queue_cleanups = []
+        self._run_profile_name = None
         # Arrow images used by the stylesheet, deleted when the window closes.
         self._arrow_dir = QTemporaryDir()
 
@@ -197,8 +205,15 @@ class MainWindow(ProfilesMixin, DownloadsMixin, QMainWindow):
         self.stop_button.clicked.connect(self._stop_download)
         self.start_button.setObjectName("primaryButton")
         self.stop_button.setObjectName("stopButton")
+        self.download_all_button = QPushButton("Download all")
+        self.download_all_button.setToolTip(
+            "Download every profile in turn. Profiles that cannot be downloaded are "
+            "skipped, and clean-up questions are asked at the end."
+        )
+        self.download_all_button.clicked.connect(self._download_all)
         action_row.addWidget(self.save_button)
         action_row.addStretch()
+        action_row.addWidget(self.download_all_button)
         action_row.addWidget(self.start_button)
         action_row.addWidget(self.stop_button)
         right_layout.addLayout(action_row)

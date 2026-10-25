@@ -59,6 +59,19 @@ def log_file_name(profile_name, moment):
     return f"{moment:%Y-%m-%d %H-%M-%S} {name}.log"
 
 
+def queue_summary(results, total):
+    """Summary of a Download all queue from (profile name, status) pairs,
+    e.g. "3 profiles: 2 completed, 1 skipped." Profiles not reached after a
+    Stop are counted as not started."""
+    counts = {}
+    for _, status in results:
+        counts[status] = counts.get(status, 0) + 1
+    if total > len(results):
+        counts["not started"] = total - len(results)
+    parts = [f"{count} {status}" for status, count in counts.items()]
+    return f"{total} profile(s): " + (", ".join(parts) if parts else "nothing to do") + "."
+
+
 def completion_message(progress):
     """Summary of a finished run for the notification, from the progress
     counters (see DownloadsMixin._handle_progress_event)."""
@@ -77,33 +90,44 @@ def completion_message(progress):
 class DownloadsMixin:
     """Download handling of MainWindow (see main_window.py)."""
 
-    def _start_download(self, only_tracks=None):
+    def _start_download(self, only_tracks=None, interactive=True):
         """Download the selected profile's playlist, or only the given Spotify
-        track URLs of it (to retry the tracks that failed)."""
+        track URLs of it (to retry the tracks that failed). Returns True if
+        the worker was started.
+
+        Not interactive (Download all): the form is not saved and problems
+        are written to the log instead of shown in a dialog, so that a queue
+        of profiles never waits for the user."""
         if self.process and self.process.state() != QProcess.ProcessState.NotRunning:
-            return
-        self._save_current_profile()
+            return False
+        if interactive:
+            self._save_current_profile()
         profile = self._current_profile()
-        if not profile or not self._validate_profile(profile):
-            return
+        if not profile:
+            return False
+        problem = self._profile_problem(profile)
+        if problem:
+            self._report_problem(*problem, interactive=interactive)
+            return False
 
         destination = Path(profile["destination"]).expanduser()
         try:
             destination.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            QMessageBox.critical(self, "Destination error", str(exc))
-            return
+            self._report_problem("Destination error", str(exc), interactive=interactive)
+            return False
 
         vendor = resource_path("vendor")
         missing = [str(vendor / name) for name in ("ffmpeg.exe", "ffprobe.exe", "deno.exe")
                    if not (vendor / name).is_file()]
         if missing:
-            QMessageBox.warning(
-                self, "Missing dependency",
+            self._report_problem(
+                "Missing dependency",
                 "Could not find:\n" + "\n".join(missing)
                 + "\n\nRun fetch_vendor.ps1 to download the required tools.",
+                interactive=interactive,
             )
-            return
+            return False
 
         args = [
             "--url", profile["url"],
@@ -162,14 +186,78 @@ class DownloadsMixin:
         self.logs.appendPlainText(f"> Download threads: {profile.get('threads', 1)}")
         if only_tracks:
             self.logs.appendPlainText(f"> Retrying {len(only_tracks)} failed track(s)")
+        if self._queue is not None:
+            position = self._queue_total - len(self._queue)
+            self.logs.appendPlainText(f"> Download all: profile {position} of {self._queue_total}")
         self.logs.appendPlainText("")
+        self._run_profile_name = profile["name"]
         self.log_state.setText("Starting…")
         self._reset_progress()
         self.status_label.setText("Running")
-        self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
-        self._update_retry_button()
+        self._set_running(True)
         process.start(program, process_args)
+        return True
+
+    def _set_running(self, running):
+        self.start_button.setEnabled(not running)
+        self.download_all_button.setEnabled(not running)
+        self.stop_button.setEnabled(running)
+        self._update_retry_button()
+
+    def _report_problem(self, title, message, interactive=True):
+        """Show why a download cannot start: a dialog, or a log line when no
+        one is expected to answer (Download all)."""
+        if interactive:
+            QMessageBox.warning(self, title, message)
+        else:
+            name = (self._current_profile() or {}).get("name", "?")
+            self.logs.appendPlainText(f"[Download all] Skipped {name}: {title}. {message}")
+
+    def _download_all(self):
+        """Download every profile in turn, in the list order. Problems and
+        clean-up questions do not interrupt the queue: problems are logged,
+        clean-up questions are asked at the end, with one notification."""
+        if self.process and self.process.state() != QProcess.ProcessState.NotRunning:
+            return
+        if self._current_profile():
+            self._save_current_profile()  # keep the edits of the shown profile
+        self._queue = [profile["id"] for profile in self.config.get("profiles", [])]
+        self._queue_total = len(self._queue)
+        self._queue_results = []
+        self._queue_cleanups = []
+        self._start_next_in_queue()
+
+    def _start_next_in_queue(self):
+        while self._queue:
+            profile_id = self._queue.pop(0)
+            self._select_profile(profile_id)
+            name = (self._current_profile() or {}).get("name", "?")
+            if self._start_download(interactive=False):
+                return
+            self._queue_results.append((name, "skipped"))
+        self._finish_queue()
+
+    def _queue_run_ended(self, status):
+        """A run of the queue ended with status (completed, failed, stopped):
+        go on with the next profile, unless the user stopped."""
+        self._queue_results.append((self._run_profile_name, status))
+        if status == "stopped":
+            self._queue.clear()
+        # Started from the event loop, once this run is fully cleaned up.
+        QTimer.singleShot(0, self._start_next_in_queue)
+
+    def _finish_queue(self):
+        results, cleanups = self._queue_results, self._queue_cleanups
+        self._queue = None
+        summary = queue_summary(results, self._queue_total)
+        self.logs.appendPlainText(f"[Download all] {summary}")
+        for name, status in results:
+            self.logs.appendPlainText(f"  - {name}: {status}")
+        self.log_state.setText("Download all finished")
+        if not any(status == "stopped" for _, status in results):
+            self._notify("Download all finished", summary)
+        for name, destination, cleanup in cleanups:
+            self._offer_cleanup(destination, cleanup, name)
 
     def _start_log_file(self, profile_name):
         """Save this run's log in data\\logs\\, and keep only the latest files.
@@ -249,41 +337,54 @@ class DownloadsMixin:
         self._cancel_stop_timer()
         self._release_process_tree()
         self._end_progress()
-        self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
+        # In Download all, notifications and clean-up questions wait for the
+        # end of the queue (see _finish_queue).
+        in_queue = self._queue is not None
 
         if self.stop_requested:
+            status = "stopped"
             self.log_state.setText("Download stopped")
             self.status_label.setText("Stopped")
             self.logs.appendPlainText("[Application] Download stopped by user.")
             self._remove_partial_files_later(self._partial_files)
 
         elif exit_status == QProcess.ExitStatus.CrashExit:
+            status = "failed"
             self.log_state.setText("Process crashed")
             self.status_label.setText("Error")
             self.logs.appendPlainText("[Application] spotDL worker crashed.")
-            self._notify("Download failed", "The spotDL worker crashed. See the logs for details.")
+            if not in_queue:
+                self._notify("Download failed", "The spotDL worker crashed. See the logs for details.")
 
         elif exit_code == 0:
+            status = "completed"
             self.log_state.setText("Download finished")
             self.status_label.setText("Completed")
             self.logs.appendPlainText("[Application] Download process finished.")
-            self._notify("Download finished", completion_message(self._progress))
-            self._offer_cleanup()
+            if in_queue:
+                self._queue_cleanups.append(
+                    (self._run_profile_name, self._download_destination, self._cleanup))
+            else:
+                self._notify("Download finished", completion_message(self._progress))
+                self._offer_cleanup(self._download_destination, self._cleanup)
 
         else:
+            status = "failed"
             self.log_state.setText(f"Finished with exit code {exit_code}")
             self.status_label.setText("Error")
             self.logs.appendPlainText(
                 f"[Application] spotDL exited with code {exit_code}."
             )
-            self._notify("Download failed", f"spotDL exited with code {exit_code}. See the logs for details.")
+            if not in_queue:
+                self._notify("Download failed", f"spotDL exited with code {exit_code}. See the logs for details.")
 
         self.stop_requested = False
         self.process = None
         self._remove_retry_file()
-        self._update_retry_button()
+        self._set_running(False)
         process.deleteLater()
+        if in_queue:
+            self._queue_run_ended(status)
 
     def _reset_progress(self):
         self._progress = {"total": None, "done": 0, "failed": 0, "up_to_date": 0}
@@ -361,17 +462,20 @@ class DownloadsMixin:
         self.raise_()
         self.activateWindow()
 
-    def _offer_cleanup(self):
+    def _offer_cleanup(self, destination, cleanup, profile_name=None):
         """After a complete run, offer to move to the Recycle Bin the files of
         tracks no longer in the playlist, then the older copies of tracks in
-        another audio format. Nothing is moved without confirmation."""
-        if self._download_destination is None:
+        another audio format. Nothing is moved without confirmation.
+        profile_name is shown when several profiles were downloaded."""
+        if destination is None:
             return
         for key, title, text, kept in CLEANUP_QUESTIONS:
-            names = [str(path) for path in (self._cleanup or {}).get(key) or []]
+            names = [str(path) for path in (cleanup or {}).get(key) or []]
             if not names:
                 continue
-            files = [self._download_destination / name for name in names]
+            files = [destination / name for name in names]
+            if profile_name:
+                title = f"{title} ({profile_name})"
             if not self._confirm_cleanup(
                 title, text.format(count=len(files)),
                 "Move them to the Recycle Bin? You can restore them from there.",
@@ -421,15 +525,15 @@ class DownloadsMixin:
             self._cancel_stop_timer()
             self._release_process_tree()
             self._end_progress()
-            self.start_button.setEnabled(True)
-            self.stop_button.setEnabled(False)
             self.status_label.setText("Error")
             self.log_state.setText("Failed to start")
             self.stop_requested = False
             self.process = None
             process.deleteLater()
             self._remove_retry_file()
-            self._update_retry_button()
+            self._set_running(False)
+            if self._queue is not None:
+                self._queue_run_ended("failed to start")
         elif not (self.stop_requested and error == QProcess.ProcessError.Crashed):
             # A crash is expected when the user stopped the worker.
             self.logs.appendPlainText(f"[Application] Worker error: {process.errorString()}")

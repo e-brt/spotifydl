@@ -149,12 +149,27 @@ class ProfilesMixin:
         except OSError as exc:
             QMessageBox.critical(self, "Configuration error", f"Could not save configuration:\n{exc}")
 
-    def _validate_profile(self, profile):
+    @staticmethod
+    def _profile_problem(profile):
+        """Why the profile cannot be downloaded, as (title, message), or None."""
         url = profile.get("url", "").strip()
         if not url.startswith("https://open.spotify.com/playlist/") and not url.startswith("https://spotify.link/"):
-            QMessageBox.warning(self, "Invalid playlist URL", "Enter a valid Spotify playlist URL in the selected profile.")
-            return False
+            return "Invalid playlist URL", "Enter a valid Spotify playlist URL in the selected profile."
         if not profile.get("destination", "").strip():
-            QMessageBox.warning(self, "Missing destination", "Choose a destination folder first.")
+            return "Missing destination", "Choose a destination folder first."
+        return None
+
+    def _validate_profile(self, profile):
+        problem = self._profile_problem(profile)
+        if problem:
+            QMessageBox.warning(self, *problem)
             return False
         return True
+
+    def _select_profile(self, profile_id):
+        """Select a profile in the list, which also shows it in the form."""
+        for row in range(self.profile_list.count()):
+            if self.profile_list.item(row).data(Qt.ItemDataRole.UserRole) == profile_id:
+                self.profile_list.setCurrentRow(row)
+                return True
+        return False

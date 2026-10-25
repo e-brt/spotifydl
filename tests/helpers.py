@@ -80,7 +80,9 @@ class AppTestCase(unittest.TestCase):
                 if "--only-tracks" in args:
                     retry_file = args[args.index("--only-tracks") + 1]
                     test.retried_urls = json.loads(Path(retry_file).read_text(encoding="utf-8"))
-                super().start(sys.executable, [str(FAKE_WORKER), test.mode])
+                # A list of modes plays one scenario per run (Download all).
+                mode = test.mode.pop(0) if isinstance(test.mode, list) else test.mode
+                super().start(sys.executable, [str(FAKE_WORKER), mode])
 
         for target, attribute, value in [
             (main_window, "load_config", lambda: self.config),
