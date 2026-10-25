@@ -10,6 +10,7 @@ A Windows GUI for managing saved Spotify playlist profiles and downloading track
 - Check existing files before downloading, and download again those that are truncated or below the selected bitrate.
 - Use another search result when a YouTube video is age restricted or unavailable.
 - A Windows notification when a download ends in the background, and a **Retry failed** button for the tracks that failed.
+- Each run's log is saved in `data\logs\` (**File → Open logs folder**); the latest 100 are kept.
 - Keep the folder in sync with the playlist: a `.m3u8` playlist file in the playlist order, and an offer to move to the Recycle Bin the tracks removed from the playlist and, after a format change, the older copies in the previous format.
 - Light and dark themes.
 
@@ -92,7 +93,7 @@ The packaged application keeps its folder uncluttered:
 SpotifyDownloader\
 ├── SpotifyDownloader.exe
 ├── _internal\     application code and libraries
-├── data\          config.json and spotify_cache.json (your files)
+├── data\          config.json, spotify_cache.json and logs\ (your files)
 └── docs\          LICENSE, CHANGELOG.md, THIRD_PARTY_NOTICES.md and licenses\
 ```
 

@@ -2,9 +2,61 @@
 
 from PySide6.QtCore import Qt, QPointF, QRectF, QSize, QVariantAnimation
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QAbstractButton
+from PySide6.QtWidgets import QAbstractButton, QPlainTextEdit
 
 from theme import DEFAULT_THEME, THEMES
+
+
+class LogView(QPlainTextEdit):
+    """Read-only log view that also writes what it shows to a file, while one
+    is attached. Everything shown goes through appendPlainText or
+    insertPlainText, so the file gets exactly the displayed text, written
+    as it arrives; the view itself only keeps its last lines."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self._file = None
+        self._at_line_start = True
+
+    def attach_file(self, path):
+        """Write from now on to path (appended, UTF-8), instead of any earlier file."""
+        self.detach_file()
+        try:
+            self._file = open(path, "a", encoding="utf-8")
+        except OSError:
+            self._file = None
+        self._at_line_start = True
+        return self._file is not None
+
+    def detach_file(self):
+        if self._file is not None:
+            try:
+                self._file.close()
+            except OSError:
+                pass
+            self._file = None
+
+    def appendPlainText(self, text):
+        super().appendPlainText(text)
+        # appendPlainText always starts a new paragraph.
+        self._write(("" if self._at_line_start else "\n") + text + "\n")
+
+    def insertPlainText(self, text):
+        super().insertPlainText(text)
+        self._write(text)
+
+    def _write(self, text):
+        if self._file is None or not text:
+            return
+        try:
+            self._file.write(text)
+            # Flushed at once, so the log survives a crash of the application.
+            self._file.flush()
+            self._at_line_start = text.endswith("\n")
+        except OSError:
+            # A full or removed disk must not break the application.
+            self.detach_file()
 
 
 class ThemeSwitch(QAbstractButton):

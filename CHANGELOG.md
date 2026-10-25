@@ -9,6 +9,10 @@ version that has no section here.
 
 ## [Unreleased]
 
+### Added
+- Each run's log is saved in `data\logs\` (File → Open logs folder); the
+  latest 100 are kept.
+
 ## [1.1.0] - 2026-10-25
 
 ### Added

@@ -1,5 +1,5 @@
-"""Running the spotDL worker: start, Stop, logs, progress and the clean-up
-of a track left incomplete by Stop."""
+"""Running the spotDL worker: start, Stop, logs (shown and saved), progress,
+the clean-up of a track left incomplete by Stop, and the end of a run."""
 
 import json
 import os
@@ -7,16 +7,18 @@ import re
 import sys
 import tempfile
 import time
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 
 from PySide6.QtCore import QProcess, QProcessEnvironment, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
-from config_manager import DEFAULT_BITRATE, DEFAULT_FORMAT
+from config_manager import DEFAULT_BITRATE, DEFAULT_FORMAT, logs_dir
 from process_control import ProcessTree, is_file_in_use
 from recycle_bin import move_to_recycle_bin
 from resources import resource_path
+from version import __version__
 from worker import LOSSLESS_FORMATS, PROGRESS_PREFIX
 
 # How long to wait for the worker to exit after Stop before killing it again.
@@ -33,6 +35,10 @@ LOG_COLUMNS = 300
 TRAILING_SPACES = re.compile(r"[ \t]+(?=\r?\n|\Z)")
 
 
+# Only the latest run logs are kept in data\logs\.
+MAX_LOG_FILES = 100
+APP_LOG_HEADER = "Spotify Playlist Downloader"
+
 # What the worker's cleanup event may list, and how to ask about it:
 # (event key, dialog title, text, what the log says was kept).
 CLEANUP_QUESTIONS = [
@@ -44,6 +50,13 @@ CLEANUP_QUESTIONS = [
      "the file in the format selected now.",
      "older copy(ies) in another format"),
 ]
+
+
+def log_file_name(profile_name, moment):
+    """Name of a run's log file: its start time (so that names sort by date)
+    and the profile name, without characters Windows does not allow."""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", profile_name or "").strip(" .") or "profile"
+    return f"{moment:%Y-%m-%d %H-%M-%S} {name}.log"
 
 
 def completion_message(progress):
@@ -139,6 +152,7 @@ class DownloadsMixin:
             program = sys.executable
             process_args = [str(Path(__file__).resolve().with_name("main.py")), "--spotdl-worker"] + args
 
+        self._start_log_file(profile["name"])
         self.logs.appendPlainText(f"\n> Starting profile: {profile['name']}")
         self.logs.appendPlainText(f"> Destination: {destination}")
         quality = profile.get("format", DEFAULT_FORMAT)
@@ -156,6 +170,27 @@ class DownloadsMixin:
         self.stop_button.setEnabled(True)
         self._update_retry_button()
         process.start(program, process_args)
+
+    def _start_log_file(self, profile_name):
+        """Save this run's log in data\\logs\\, and keep only the latest files.
+        The file stays attached until the next run or the window closes, so
+        it also gets the messages written after the worker ended."""
+        try:
+            folder = logs_dir()
+        except OSError as exc:
+            self.logs.detach_file()
+            self.logs.appendPlainText(f"[Application] The log of this run cannot be saved: {exc}")
+            return
+        path = folder / log_file_name(profile_name, datetime.now())
+        if not self.logs.attach_file(path):
+            self.logs.appendPlainText(f"[Application] The log of this run cannot be saved to {path}")
+            return
+        self.logs.appendPlainText(f"{APP_LOG_HEADER} {__version__} - {datetime.now():%Y-%m-%d %H:%M:%S}")
+        for old in sorted(folder.glob("*.log"), key=lambda file: file.name)[:-MAX_LOG_FILES]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
 
     def _retry_failed(self):
         """Download again only the tracks that failed in the last run."""

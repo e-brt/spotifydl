@@ -36,6 +36,13 @@ def config_dir():
     return base
 
 
+def logs_dir():
+    """Folder of the saved logs, one file per run: data\\logs\\."""
+    path = config_dir() / "logs"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def migrate_user_files(old_dir, new_dir):
     """Move user files left next to the executable by an earlier version.
 

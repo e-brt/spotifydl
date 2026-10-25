@@ -38,7 +38,7 @@ src\                 application code (run from source: python src\main.py)
   worker.py          the spotDL worker process
   theme.py, widgets.py, config_manager.py, process_control.py,
   recycle_bin.py, resources.py, version.py
-tests\               unittest suite (71 tests, about 55 s, no network)
+tests\               unittest suite (78 tests, about 65 s, no network)
 tools\               collect_licenses.py (build)
 assets\              application icon
 build.ps1            build, test and package
@@ -52,7 +52,7 @@ The packaged application keeps its folder uncluttered:
 SpotifyDownloader\
 ├── SpotifyDownloader.exe
 ├── _internal\     code, libraries, vendor executables, icon
-├── data\          config.json and spotify_cache.json (the user's files)
+├── data\          config.json, spotify_cache.json, logs\ (the user's files)
 └── docs\          LICENSE, CHANGELOG.md, THIRD_PARTY_NOTICES.md, licenses\
 ```
 
@@ -123,7 +123,24 @@ instead of being kept truncated.
   Confirmed files are moved to the **Windows Recycle Bin**, so they can be
   restored. Nothing is ever deleted without confirmation.
 
-### 3.6 Interface
+### 3.6 Saved logs
+
+Each run's log is saved in `data\logs\<start time> <profile>.log` (e.g.
+`2026-10-25 14-30-12 Rock.log`), opened with **File → Open logs folder**.
+
+- The file holds exactly what the log view shows, starting with a header line
+  (application version and start time), without the progress events.
+- The log view (`widgets.LogView`) writes each line to the file as it is shown
+  and flushes it, so the log survives a crash; the view itself keeps only its
+  last 5,000 lines, the file keeps everything, and clearing the view does not
+  touch the file.
+- The file stays attached until the next run starts or the window closes, so
+  messages written after the worker ended (removal of a partial file, Recycle
+  Bin results) are saved too.
+- Only the latest `MAX_LOG_FILES` (100) logs are kept. If the folder cannot be
+  used, the run continues and the log view says so.
+
+### 3.7 Interface
 
 - Dark and light themes, switched with a sun/moon switch in the header or
   **View → Theme → Light / Dark** (exclusive, kept in sync), saved in
@@ -280,8 +297,8 @@ format are offered for clean-up (section 3.5).
 
 `config_manager.py` stores the user's files in `data\`, next to the executable
 (or in the project folder from source): `config.json`, `config.json.broken`
-(a damaged configuration is set aside there and replaced by a default one)
-and `spotify_cache.json`. The configuration is written atomically (temporary
+(a damaged configuration is set aside there and replaced by a default one),
+`spotify_cache.json` and `logs\` (section 3.6). The configuration is written atomically (temporary
 file, then replace). Files left next to the executable by builds before
 `data\` existed are moved there on the next start; a file already in `data\`
 is never overwritten.
@@ -304,11 +321,11 @@ archive never contains them.
 
 ### 7.2 Tests
 
-`python -m unittest discover -s tests`: 71 tests, about 55 s, no network. The
+`python -m unittest discover -s tests`: 78 tests, about 65 s, no network. The
 GUI tests run the real window with a fake worker (`tests\fake_worker.py`), an
 in-memory configuration and a temporary folder. They cover Stop and Close
 (Windows process tree, partial file), progress, end of run (retry,
-notification, clean-up offers, Recycle Bin calls), themes, the minimum window
+notification, clean-up offers, Recycle Bin calls), saved logs, themes, the minimum window
 size (on the real Windows platform, with a transparent window), the
 configuration location and migration, the worker logic (blocked video retry,
 Spotify cache, quality check on files generated with FFmpeg, playlist file,

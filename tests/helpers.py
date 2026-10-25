@@ -54,6 +54,8 @@ class AppTestCase(unittest.TestCase):
         self.qt = qt_app()
         self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.out = Path(self._tmp.name)
+        self._logs_tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.logs_folder = Path(self._logs_tmp.name)
         self.config = {
             "version": 1,
             "settings": {},
@@ -84,6 +86,7 @@ class AppTestCase(unittest.TestCase):
             (main_window, "load_config", lambda: self.config),
             (profiles, "save_config", lambda config: self.saved_configs.append(config)),
             (downloads, "QProcess", FakeWorkerProcess),
+            (downloads, "logs_dir", lambda: self.logs_folder),
             (QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)),
         ]:
             patcher = mock.patch.object(target, attribute, value)
@@ -101,11 +104,13 @@ class AppTestCase(unittest.TestCase):
         # than whenever Python collects them: Qt could otherwise deliver an
         # event to a window already destroyed, and crash the next test.
         for window in self.windows:
+            window.logs.detach_file()
             window.hide()
             window.deleteLater()
         self.windows.clear()
         self.wait(lambda: False, 0.2)
         self._tmp.cleanup()
+        self._logs_tmp.cleanup()
 
     def make_window(self):
         window = main_window.MainWindow()
