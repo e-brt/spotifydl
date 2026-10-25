@@ -4,7 +4,8 @@
 
 .DESCRIPTION
     1. Checks that vendor\ contains working deno.exe, ffmpeg.exe and ffprobe.exe.
-    2. Checks that the installed Python packages match requirements.txt.
+    2. Checks that the installed Python packages match requirements.txt, then
+       runs the tests in tests\ (skip them with -SkipTests).
     3. Sets aside the user files of the previous build (config.json,
        spotify_cache.json), which PyInstaller deletes with the output folder.
     4. Runs PyInstaller, then puts the user files back, even if the build fails.
@@ -14,12 +15,16 @@
     Python interpreter to build with. Defaults to venv\Scripts\python.exe,
     then .venv\Scripts\python.exe.
 
+.PARAMETER SkipTests
+    Build without running the tests.
+
 .EXAMPLE
     .\build.ps1
 #>
 [CmdletBinding()]
 param(
-    [string]$Python
+    [string]$Python,
+    [switch]$SkipTests
 )
 
 $ErrorActionPreference = "Stop"
@@ -108,6 +113,21 @@ if ($problems.Count -gt 0) {
     Stop-Build "Installed packages do not match requirements.txt. Run: $Python -m pip install -r requirements.txt"
 }
 Write-Host "  All pinned packages are installed with the expected versions."
+
+Write-Step "Running the tests"
+if ($SkipTests) {
+    Write-Host "  Skipped (-SkipTests)." -ForegroundColor Yellow
+}
+else {
+    # unittest reports on stderr; that is not an error by itself.
+    $ErrorActionPreference = "Continue"
+    & $Python -m unittest discover -s tests
+    $testExitCode = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    if ($testExitCode -ne 0) {
+        Stop-Build "Tests failed. Fix them, or build anyway with -SkipTests."
+    }
+}
 
 # --- 3. Set aside the user files -------------------------------------------------
 Write-Step "Keeping user files from the previous build"
