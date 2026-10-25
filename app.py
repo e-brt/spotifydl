@@ -1,8 +1,11 @@
 import os
+import re
 import sys
+import time
+from functools import partial
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QProcess
+from PySide6.QtCore import Qt, QProcess, QProcessEnvironment, QTimer
 from PySide6.QtGui import QAction, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -12,15 +15,50 @@ from PySide6.QtWidgets import (
 )
 
 from config_manager import load_config, save_config, config_path
+from process_control import ProcessTree, is_file_in_use
 
 
 APP_NAME = "Spotify Playlist Downloader"
+# How long to wait for the worker to exit after Stop before killing it again.
+STOP_TIMEOUT_MS = 5000
+# Output formats spotDL can write; used to find tracks left incomplete by Stop.
+AUDIO_EXTENSIONS = {".mp3", ".flac", ".ogg", ".opus", ".m4a", ".wav"}
+# Killed processes can release their files with a short delay.
+PARTIAL_DELETE_ATTEMPTS = 10
+PARTIAL_DELETE_RETRY_MS = 300
+# spotDL logs through rich, which wraps at 80 columns when its output is not a
+# terminal. Use a wider console and let the log view wrap to its own width.
+LOG_COLUMNS = 300
+# rich pads every line with spaces up to the console width.
+TRAILING_SPACES = re.compile(r"[ \t]+(?=\r?\n|\Z)")
 
 
 def resource_path(*parts):
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
     return base.joinpath(*parts)
 
+
+def hide_child_consoles():
+    """Start every console child (FFmpeg, FFprobe, Deno) without a window.
+
+    In the packaged windowed build the worker has no console, so Windows opens
+    a new, visible console for each console program spotDL starts, which then
+    flashes on screen. spotDL and yt-dlp do not pass CREATE_NO_WINDOW, so it is
+    added here to every subprocess.Popen, which asyncio subprocesses also use.
+    """
+    if sys.platform != "win32":
+        return
+    import subprocess
+
+    original_init = subprocess.Popen.__init__
+
+    def __init__(self, *args, **kwargs):
+        flags = kwargs.get("creationflags", 0)
+        if not flags & (subprocess.CREATE_NEW_CONSOLE | subprocess.DETACHED_PROCESS):
+            kwargs["creationflags"] = flags | subprocess.CREATE_NO_WINDOW
+        original_init(self, *args, **kwargs)
+
+    subprocess.Popen.__init__ = __init__
 
 
 def run_spotdl_worker():
@@ -35,6 +73,8 @@ def run_spotdl_worker():
 
     os.environ["HOME"] = home_value
     os.environ["USERPROFILE"] = home_value
+
+    hide_child_consoles()
 
     args = sys.argv[2:]
     sys.argv = ["spotdl"] + args
@@ -54,9 +94,16 @@ class MainWindow(QMainWindow):
 
         self.config = load_config()
         self.process = None
+        self.process_tree = None
         self.current_profile_id = None
         self._loading_profile = False
         self.stop_requested = False
+        self._stop_timer = None
+        self._download_destination = None
+        self._download_started_at = None
+        self._partial_files = []
+        # Incomplete last line of output, per worker process.
+        self._output_tails = {}
 
         self._build_ui()
         self._apply_theme()
@@ -179,7 +226,7 @@ class MainWindow(QMainWindow):
         logs_layout.addLayout(log_toolbar)
         self.logs = QPlainTextEdit()
         self.logs.setReadOnly(True)
-        self.logs.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.logs.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.logs.setFont(QFont("Consolas", 9))
         self.logs.document().setMaximumBlockCount(5000)
         logs_layout.addWidget(self.logs)
@@ -212,6 +259,7 @@ class MainWindow(QMainWindow):
             QPushButton#stopButton { background: #7c3038; border-color: #93404a; color: white; font-weight: 600; }
             QPushButton#stopButton:hover { background: #99404a; }
             QPushButton#stopButton:pressed { background: #60232a; border-style: inset; }
+            QPushButton#primaryButton:disabled, QPushButton#stopButton:disabled { background: #20232a; border-color: #2b303b; color: #666e7b; font-weight: 600; }
             QStatusBar { color: #9ba5b5; }
             QSplitter::handle { background: #262b35; width: 2px; }
         """)
@@ -372,16 +420,30 @@ class MainWindow(QMainWindow):
             "download", profile["url"]
         ]
 
-        self.process = QProcess(self)
-        self.process.setWorkingDirectory(str(destination))
-        env = self.process.processEnvironment()
+        process = QProcess(self)
+        process.setWorkingDirectory(str(destination))
+        # processEnvironment() is empty until one is set: start from the system
+        # environment so the worker keeps SystemRoot, TEMP, APPDATA, etc.
+        env = QProcessEnvironment.systemEnvironment()
         path_value = str(vendor) + os.pathsep + env.value("PATH")
         env.insert("PATH", path_value)
-        self.process.setProcessEnvironment(env)
-        self.process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        self.process.readyReadStandardOutput.connect(self._read_process_output)
-        self.process.finished.connect(self._process_finished)
-        self.process.errorOccurred.connect(self._process_error)
+        # Deliver worker output as soon as it is written, in a known encoding.
+        env.insert("PYTHONUNBUFFERED", "1")
+        env.insert("PYTHONIOENCODING", "utf-8")
+        env.insert("COLUMNS", str(LOG_COLUMNS))
+        process.setProcessEnvironment(env)
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        # Each handler receives the process that emitted the signal, so signals
+        # from an earlier worker cannot change the state of a newer download.
+        process.started.connect(partial(self._process_started, process))
+        process.readyReadStandardOutput.connect(partial(self._read_process_output, process))
+        process.finished.connect(partial(self._process_finished, process))
+        process.errorOccurred.connect(partial(self._process_error, process))
+        self.process = process
+        self.stop_requested = False
+        self._download_destination = destination
+        self._download_started_at = time.time()
+        self._partial_files = []
 
         if getattr(sys, "frozen", False):
             program = sys.executable
@@ -397,66 +459,179 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Running")
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
-        self.process.start(program, process_args)
+        process.start(program, process_args)
 
-    def _read_process_output(self):
-        if not self.process:
+    def _process_started(self, process):
+        if process is not self.process:
             return
-        data = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
-        if data:
+        self.process_tree = ProcessTree()
+        if not self.process_tree.attach(process.processId()) and sys.platform == "win32":
+            self.logs.appendPlainText("[Application] Could not track the worker process; Stop may leave child processes running.")
+
+    def _read_process_output(self, process, flush=False):
+        data = self._output_tails.pop(process, b"") + bytes(process.readAllStandardOutput())
+        if not flush:
+            # Only show complete lines, so trailing padding can be stripped and
+            # multi-byte characters are never split across two reads.
+            end = data.rfind(b"\n") + 1
+            if end < len(data):
+                self._output_tails[process] = data[end:]
+            data = data[:end]
+        text = TRAILING_SPACES.sub("", data.decode("utf-8", errors="replace"))
+        if text:
             self.logs.moveCursor(self.logs.textCursor().MoveOperation.End)
-            self.logs.insertPlainText(data)
+            self.logs.insertPlainText(text)
             self.logs.ensureCursorVisible()
 
-    def _process_finished(self, exit_code, exit_status):
-        self._read_process_output()
+    def _process_finished(self, process, exit_code, exit_status):
+        self._read_process_output(process, flush=True)
+        if process is not self.process:
+            process.deleteLater()
+            return
+        self._cancel_stop_timer()
+        self._release_process_tree()
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
 
         if self.stop_requested:
             self.log_state.setText("Download stopped")
             self.status_label.setText("Stopped")
-            self.logs.appendPlainText("\n[Application] Download stopped by user.")
+            self.logs.appendPlainText("[Application] Download stopped by user.")
+            self._remove_partial_files_later(self._partial_files)
 
         elif exit_status == QProcess.ExitStatus.CrashExit:
             self.log_state.setText("Process crashed")
             self.status_label.setText("Error")
-            self.logs.appendPlainText("\n[Application] spotDL worker crashed.")
+            self.logs.appendPlainText("[Application] spotDL worker crashed.")
 
         elif exit_code == 0:
             self.log_state.setText("Download finished")
             self.status_label.setText("Completed")
-            self.logs.appendPlainText("\n[Application] Download process finished.")
+            self.logs.appendPlainText("[Application] Download process finished.")
 
         else:
             self.log_state.setText(f"Finished with exit code {exit_code}")
             self.status_label.setText("Error")
             self.logs.appendPlainText(
-                f"\n[Application] spotDL exited with code {exit_code}."
+                f"[Application] spotDL exited with code {exit_code}."
             )
 
         self.stop_requested = False
         self.process = None
+        process.deleteLater()
 
-    def _process_error(self, error):
-        if self.process and error == QProcess.ProcessError.FailedToStart:
-            self.logs.appendPlainText("\n[Application] Could not start spotDL worker.")
+    def _process_error(self, process, error):
+        if process is not self.process:
+            return
+        if error == QProcess.ProcessError.FailedToStart:
+            # finished() is not emitted when the process never started.
+            self.logs.appendPlainText(f"[Application] Could not start spotDL worker: {process.errorString()}")
+            self._cancel_stop_timer()
+            self._release_process_tree()
             self.start_button.setEnabled(True)
             self.stop_button.setEnabled(False)
             self.status_label.setText("Error")
             self.log_state.setText("Failed to start")
+            self.stop_requested = False
             self.process = None
+            process.deleteLater()
+        elif not (self.stop_requested and error == QProcess.ProcessError.Crashed):
+            # A crash is expected when the user stopped the worker.
+            self.logs.appendPlainText(f"[Application] Worker error: {process.errorString()}")
 
     def _stop_download(self):
-        if not self.process or self.process.state() == QProcess.ProcessState.NotRunning:
+        process = self.process
+        if not process or process.state() == QProcess.ProcessState.NotRunning or self.stop_requested:
             return
 
         self.stop_requested = True
-        self.process.terminate()
-
-        self.logs.appendPlainText("\n[Application] Stop requested.")
+        self.stop_button.setEnabled(False)
+        self.logs.appendPlainText("[Application] Stop requested.")
         self.status_label.setText("Stopping...")
         self.log_state.setText("Stopping...")
+        self._capture_partial_files()
+
+        if sys.platform == "win32":
+            # terminate() only posts WM_CLOSE, which a windowless worker never
+            # receives, so there is no graceful path: end the whole tree now.
+            self._kill_worker()
+        else:
+            process.terminate()
+
+        self._stop_timer = QTimer(self)
+        self._stop_timer.setSingleShot(True)
+        self._stop_timer.timeout.connect(partial(self._stop_timed_out, process))
+        self._stop_timer.start(STOP_TIMEOUT_MS)
+
+    def _stop_timed_out(self, process):
+        if process is not self.process or process.state() == QProcess.ProcessState.NotRunning:
+            return
+        self.logs.appendPlainText("[Application] Worker did not exit in time; forcing termination.")
+        self._kill_worker()
+
+    def _kill_worker(self):
+        if self.process_tree:
+            self.process_tree.kill()
+        if self.process and self.process.state() != QProcess.ProcessState.NotRunning:
+            self.process.kill()
+
+    def _cancel_stop_timer(self):
+        if self._stop_timer is not None:
+            self._stop_timer.stop()
+            self._stop_timer.deleteLater()
+            self._stop_timer = None
+
+    def _release_process_tree(self):
+        if self.process_tree:
+            # Closing the job also ends any leftover child of the worker.
+            self.process_tree.close()
+            self.process_tree = None
+
+    def _capture_partial_files(self):
+        """Remember the audio files the worker is writing, before it is killed.
+
+        A track counts as incomplete if it was created or modified since the
+        download started and is still held open by the worker at Stop time.
+        """
+        self._partial_files = []
+        if self._download_destination is None:
+            return
+        # Allow for coarse file-system timestamps.
+        since = self._download_started_at - 2
+        for path in self._download_destination.rglob("*"):
+            if path.suffix.lower() not in AUDIO_EXTENSIONS:
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            # st_ctime is the creation time on Windows.
+            if max(stat.st_mtime, stat.st_ctime) >= since and is_file_in_use(path):
+                self._partial_files.append(path)
+
+    def _remove_partial_files(self, files):
+        """Delete the given incomplete files. Returns those that are still locked."""
+        remaining = []
+        for path in files:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                remaining.append(path)
+            else:
+                self.logs.appendPlainText(f"[Application] Removed incomplete file: {path.name}")
+        files[:] = remaining
+        return remaining
+
+    def _remove_partial_files_later(self, files, attempts_left=PARTIAL_DELETE_ATTEMPTS):
+        # Skip if a newer stop replaced the list in the meantime.
+        if files is not self._partial_files or not self._remove_partial_files(files):
+            return
+        if attempts_left > 1:
+            QTimer.singleShot(PARTIAL_DELETE_RETRY_MS,
+                              partial(self._remove_partial_files_later, files, attempts_left - 1))
+        else:
+            for path in files:
+                self.logs.appendPlainText(f"[Application] Could not remove incomplete file: {path}")
 
     def _clear_logs(self):
         self.logs.clear()
@@ -474,9 +649,17 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
-            self.process.terminate()
-            if not self.process.waitForFinished(2500):
-                self.process.kill()
+            self.stop_requested = True
+            self._capture_partial_files()
+            files = self._partial_files
+            self._kill_worker()
+            self.process.waitForFinished(STOP_TIMEOUT_MS)
+            # The event loop is ending, so retry synchronously.
+            for _ in range(PARTIAL_DELETE_ATTEMPTS):
+                if not self._remove_partial_files(files):
+                    break
+                time.sleep(PARTIAL_DELETE_RETRY_MS / 1000)
+        self._release_process_tree()
         event.accept()
 
 
