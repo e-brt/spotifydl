@@ -5,11 +5,14 @@ import sys
 import time
 from functools import partial
 from pathlib import Path
+from string import Template
 
-from PySide6.QtCore import Qt, QProcess, QProcessEnvironment, QTimer
-from PySide6.QtGui import QAction, QFont, QIcon
+from PySide6.QtCore import (
+    Qt, QPointF, QProcess, QProcessEnvironment, QRectF, QSize, QTemporaryDir, QTimer, QVariantAnimation
+)
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QAbstractButton, QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QLineEdit,
     QSpinBox, QComboBox, QPlainTextEdit, QFileDialog, QMessageBox, QFormLayout,
     QSplitter, QGroupBox, QStatusBar, QInputDialog, QProgressBar
@@ -34,10 +37,242 @@ LOG_COLUMNS = 300
 # rich pads every line with spaces up to the console width.
 TRAILING_SPACES = re.compile(r"[ \t]+(?=\r?\n|\Z)")
 
+# Colors of each theme; the stylesheet below is shared. The choice is saved
+# in config.json under settings.theme.
+DEFAULT_THEME = "dark"
+THEMES = {
+    "dark": {
+        "window": "#15171c", "text": "#e7eaf0", "title": "#ffffff", "muted": "#9ba5b5",
+        "menu": "#1c2028", "menu_selected": "#303746",
+        "pill": "#263a32", "pill_text": "#7fe0a5",
+        "border": "#343a46", "group_title": "#bfc8d8",
+        "field": "#0f1116", "selection": "#4361ee", "selection_text": "#ffffff",
+        "item_selected": "#29344c", "item_selected_text": "#ffffff",
+        "button": "#2b303b", "button_border": "#414958", "button_hover": "#373f4e",
+        "disabled": "#20232a", "disabled_border": "#2b303b", "disabled_text": "#666e7b",
+        "primary": "#4f6bed", "primary_hover": "#6079f5", "primary_pressed": "#354bb8",
+        "stop": "#7c3038", "stop_border": "#93404a", "stop_hover": "#99404a", "stop_pressed": "#60232a",
+        "splitter": "#262b35",
+        "scroll_handle": "#3a4150", "scroll_handle_hover": "#4d5668", "arrow": "#bfc8d8",
+    },
+    "light": {
+        "window": "#f4f5f8", "text": "#1d2330", "title": "#11151d", "muted": "#5d6677",
+        "menu": "#ffffff", "menu_selected": "#e3e7f0",
+        "pill": "#d9f2e3", "pill_text": "#1b6e3f",
+        "border": "#cdd3de", "group_title": "#3b4455",
+        "field": "#ffffff", "selection": "#4f6bed", "selection_text": "#ffffff",
+        "item_selected": "#dde4fb", "item_selected_text": "#11151d",
+        "button": "#ffffff", "button_border": "#c3cad6", "button_hover": "#eceff5",
+        "disabled": "#eceef2", "disabled_border": "#d8dce4", "disabled_text": "#8f97a6",
+        "primary": "#4f6bed", "primary_hover": "#3f5ae0", "primary_pressed": "#3047b8",
+        "stop": "#c0394a", "stop_border": "#a93242", "stop_hover": "#d04556", "stop_pressed": "#962b38",
+        "splitter": "#d5dae3",
+        "scroll_handle": "#c4cad6", "scroll_handle_hover": "#a8b0bf", "arrow": "#4a5365",
+    },
+}
+STYLESHEET = Template("""
+    QMainWindow, QWidget { background: $window; color: $text; font-size: 10pt; }
+    QMenuBar, QMenu { background: $menu; color: $text; }
+    QMenuBar::item:selected, QMenu::item:selected { background: $menu_selected; }
+    QLabel#appTitle { font-size: 22pt; font-weight: 700; color: $title; }
+    QLabel#hint { color: $muted; }
+    QLabel#statusPill { background: $pill; color: $pill_text; padding: 7px 12px; border-radius: 10px; font-weight: 600; }
+    QGroupBox { border: 1px solid $border; border-radius: 10px; margin-top: 12px; padding: 12px; font-weight: 600; }
+    QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; color: $group_title; }
+    QLineEdit, QSpinBox, QComboBox, QListWidget, QPlainTextEdit { background: $field; border: 1px solid $border; border-radius: 6px; padding: 8px; selection-background-color: $selection; selection-color: $selection_text; }
+    QComboBox QAbstractItemView { background: $field; border: 1px solid $border; selection-background-color: $item_selected; selection-color: $item_selected_text; }
+    QListWidget::item { padding: 10px; border-radius: 5px; }
+    QListWidget::item:selected { background: $item_selected; color: $item_selected_text; }
+    QPushButton { background: $button; border: 1px solid $button_border; border-radius: 6px; padding: 9px 12px; }
+    QPushButton:hover { background: $button_hover; }
+    QPushButton:disabled { color: $disabled_text; background: $disabled; }
+    QPushButton#primaryButton { background: $primary; border-color: $primary; color: white; font-weight: 700; }
+    QPushButton#primaryButton:hover { background: $primary_hover; }
+    QPushButton#primaryButton:pressed { background: $primary_pressed; border-style: inset; }
+    QPushButton#stopButton { background: $stop; border-color: $stop_border; color: white; font-weight: 600; }
+    QPushButton#stopButton:hover { background: $stop_hover; }
+    QPushButton#stopButton:pressed { background: $stop_pressed; border-style: inset; }
+    QPushButton#primaryButton:disabled, QPushButton#stopButton:disabled { background: $disabled; border-color: $disabled_border; color: $disabled_text; font-weight: 600; }
+    QComboBox { padding-right: 34px; }
+    QComboBox::drop-down { subcontrol-origin: border; subcontrol-position: center right; width: 32px; border: none; }
+    QComboBox::down-arrow { image: url("$arrow_down"); width: 12px; height: 12px; }
+    QComboBox::down-arrow:on { image: url("$arrow_up"); }
+    QSpinBox { padding-right: 30px; }
+    QSpinBox::up-button, QSpinBox::down-button { subcontrol-origin: border; width: 26px; border: none; border-left: 1px solid $border; background: transparent; }
+    QSpinBox::up-button { subcontrol-position: top right; border-top-right-radius: 6px; border-bottom: 1px solid $border; }
+    QSpinBox::down-button { subcontrol-position: bottom right; border-bottom-right-radius: 6px; }
+    QSpinBox::up-button:hover, QSpinBox::down-button:hover { background: $button_hover; }
+    QSpinBox::up-arrow { image: url("$arrow_up"); width: 10px; height: 10px; }
+    QSpinBox::down-arrow { image: url("$arrow_down"); width: 10px; height: 10px; }
+    QSpinBox::up-arrow:disabled, QSpinBox::up-arrow:off, QSpinBox::down-arrow:disabled, QSpinBox::down-arrow:off { image: none; }
+    QScrollBar:vertical { background: $field; width: 14px; margin: 0; }
+    QScrollBar:horizontal { background: $field; height: 14px; margin: 0; }
+    QScrollBar::handle:vertical { background: $scroll_handle; border-radius: 4px; min-height: 32px; margin: 2px 3px; }
+    QScrollBar::handle:horizontal { background: $scroll_handle; border-radius: 4px; min-width: 32px; margin: 3px 2px; }
+    QAbstractScrollArea::corner { background: $field; }
+    QScrollBar::handle:hover { background: $scroll_handle_hover; }
+    QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; background: none; }
+    QScrollBar::add-page, QScrollBar::sub-page { background: none; }
+    QProgressBar { background: $field; border: 1px solid $border; border-radius: 5px; }
+    QProgressBar::chunk { background: $primary; border-radius: 4px; }
+    QStatusBar { color: $muted; }
+    QSplitter::handle { background: $splitter; width: 2px; }
+""")
+
 
 def resource_path(*parts):
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
     return base.joinpath(*parts)
+
+
+def make_arrow_images(directory, color):
+    """Draw rounded chevrons in the given color and return their file paths.
+
+    Stylesheets can only show arrows as images. They are drawn at run time,
+    once per theme color, rather than shipped as SVG files that would depend
+    on the Qt SVG plugin being bundled.
+    """
+    paths = {}
+    for name, points in {
+        "down": [(8, 12), (16, 20), (24, 12)],
+        "up": [(8, 20), (16, 12), (24, 20)],
+    }.items():
+        path = Path(directory) / f"arrow_{name}_{color.lstrip('#')}.png"
+        if not path.exists():
+            pixmap = QPixmap(32, 32)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(QPen(QColor(color), 3.5, Qt.PenStyle.SolidLine,
+                                Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            chevron = QPainterPath(QPointF(*points[0]))
+            for point in points[1:]:
+                chevron.lineTo(QPointF(*point))
+            painter.drawPath(chevron)
+            painter.end()
+            pixmap.save(str(path), "PNG")
+        # Stylesheet URLs need forward slashes.
+        paths[f"arrow_{name}"] = path.as_posix()
+    return paths
+
+
+class ThemeSwitch(QAbstractButton):
+    """Dark/light toggle switch: a moon on the left, a sun on the right.
+
+    Checked means the light theme. The knob slides to the active side and
+    shows its icon; the colors follow the current theme palette.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Repaint on hover, to highlight the border. Keyboard users reach it
+        # with Tab; a mouse click does not leave it highlighted.
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.setFixedSize(self.sizeHint())
+        self._colors = THEMES[DEFAULT_THEME]
+        # Knob position: 0 = dark (left), 1 = light (right).
+        self._position = 0.0
+        self._animation = QVariantAnimation(self)
+        self._animation.setDuration(150)
+        self._animation.valueChanged.connect(self._set_position)
+        self.toggled.connect(self._animate_to)
+
+    def sizeHint(self):
+        return QSize(62, 30)
+
+    def set_colors(self, colors):
+        self._colors = colors
+        self.update()
+
+    def set_light(self, light, animate=True):
+        """Change the state without emitting toggled."""
+        if self.isChecked() != light:
+            self.blockSignals(True)
+            self.setChecked(light)
+            self.blockSignals(False)
+        if animate:
+            self._animate_to(light)
+        else:
+            self._animation.stop()
+            self._set_position(1.0 if light else 0.0)
+
+    def _animate_to(self, light):
+        self._animation.stop()
+        self._animation.setStartValue(self._position)
+        self._animation.setEndValue(1.0 if light else 0.0)
+        self._animation.start()
+
+    def _set_position(self, value):
+        self._position = float(value)
+        self.update()
+
+    def paintEvent(self, event):
+        colors = self._colors
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        track = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        radius = track.height() / 2
+        highlighted = self.underMouse() or self.hasFocus()
+        border = colors["primary"] if highlighted else colors["button_border"]
+        painter.setPen(QPen(QColor(border), 1))
+        painter.setBrush(QColor(colors["field"]))
+        painter.drawRoundedRect(track, radius, radius)
+
+        margin = 3
+        knob_size = track.height() - 2 * margin
+        left = track.left() + margin
+        right = track.right() - margin - knob_size
+        center_y = track.center().y()
+        icon_size = knob_size * 0.62
+
+        # Faint icons on the track; the knob covers the active one.
+        muted = QColor(colors["muted"])
+        self._draw_moon(painter, QPointF(left + knob_size / 2, center_y), icon_size, muted)
+        self._draw_sun(painter, QPointF(right + knob_size / 2, center_y), icon_size, muted)
+
+        knob_x = left + (right - left) * self._position
+        knob = QRectF(knob_x, center_y - knob_size / 2, knob_size, knob_size)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(colors["primary"]))
+        painter.drawEllipse(knob)
+        white = QColor("#ffffff")
+        if self._position >= 0.5:
+            self._draw_sun(painter, knob.center(), icon_size, white)
+        else:
+            self._draw_moon(painter, knob.center(), icon_size, white)
+
+    @staticmethod
+    def _draw_sun(painter, center, size, color):
+        painter.setPen(QPen(color, max(1.2, size * 0.1), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.setBrush(color)
+        core = size * 0.22
+        painter.drawEllipse(center, core, core)
+        for index in range(8):
+            angle = index * 45
+            path = QPainterPath()
+            path.moveTo(center + QPointF(size * 0.36, 0))
+            path.lineTo(center + QPointF(size * 0.5, 0))
+            painter.save()
+            painter.translate(center)
+            painter.rotate(angle)
+            painter.translate(-center)
+            painter.drawPath(path)
+            painter.restore()
+
+    @staticmethod
+    def _draw_moon(painter, center, size, color):
+        # A disc with an offset disc removed from it: a crescent.
+        outer = QPainterPath()
+        outer.addEllipse(center, size * 0.42, size * 0.42)
+        bite = QPainterPath()
+        bite.addEllipse(center + QPointF(size * 0.22, -size * 0.16), size * 0.36, size * 0.36)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        painter.drawPath(outer.subtracted(bite))
 
 
 def run_spotdl_worker():
@@ -69,9 +304,14 @@ class MainWindow(QMainWindow):
         # Processed tracks: up to date, downloaded or failed.
         self._progress = {"total": None, "done": 0, "failed": 0}
         self._failed_tracks = []
+        # Arrow images used by the stylesheet, deleted when the window closes.
+        self._arrow_dir = QTemporaryDir()
 
         self._build_ui()
-        self._apply_theme()
+        settings = self.config.get("settings")
+        saved_theme = settings.get("theme") if isinstance(settings, dict) else None
+        # Applied before the window is shown; an unknown value falls back to dark.
+        self._set_theme(saved_theme, save=False)
         self._refresh_profiles()
         self.statusBar().showMessage(f"Configuration: {config_path()}")
 
@@ -89,6 +329,12 @@ class MainWindow(QMainWindow):
         title_box.addWidget(title)
         header.addLayout(title_box)
         header.addStretch()
+        self.theme_switch = ThemeSwitch()
+        self.theme_switch.toggled.connect(
+            lambda light: self._set_theme("light" if light else "dark")
+        )
+        header.addWidget(self.theme_switch, alignment=Qt.AlignmentFlag.AlignVCenter)
+        header.addSpacing(8)
         self.status_label = QLabel("Idle")
         self.status_label.setObjectName("statusPill")
         header.addWidget(self.status_label, alignment=Qt.AlignmentFlag.AlignTop)
@@ -242,34 +488,34 @@ class MainWindow(QMainWindow):
         open_config_action.triggered.connect(self._show_config_location)
         file_menu.addAction(open_config_action)
 
-    def _apply_theme(self):
-        self.setStyleSheet("""
-            QMainWindow, QWidget { background: #15171c; color: #e7eaf0; font-size: 10pt; }
-            QMenuBar, QMenu { background: #1c2028; color: #e7eaf0; }
-            QMenuBar::item:selected, QMenu::item:selected { background: #303746; }
-            QLabel#appTitle { font-size: 22pt; font-weight: 700; color: #ffffff; }
-            QLabel#hint { color: #9ba5b5; }
-            QLabel#statusPill { background: #263a32; color: #7fe0a5; padding: 7px 12px; border-radius: 10px; font-weight: 600; }
-            QGroupBox { border: 1px solid #343a46; border-radius: 10px; margin-top: 12px; padding: 12px; font-weight: 600; }
-            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; color: #bfc8d8; }
-            QLineEdit, QSpinBox, QComboBox, QListWidget, QPlainTextEdit { background: #0f1116; border: 1px solid #343a46; border-radius: 6px; padding: 8px; selection-background-color: #4361ee; }
-            QListWidget::item { padding: 10px; border-radius: 5px; }
-            QListWidget::item:selected { background: #29344c; color: #ffffff; }
-            QPushButton { background: #2b303b; border: 1px solid #414958; border-radius: 6px; padding: 9px 12px; }
-            QPushButton:hover { background: #373f4e; }
-            QPushButton:disabled { color: #666e7b; background: #20232a; }
-            QPushButton#primaryButton { background: #4f6bed; border-color: #4f6bed; color: white; font-weight: 700; }
-            QPushButton#primaryButton:hover { background: #6079f5; }
-            QPushButton#primaryButton:pressed { background: #354bb8; border-style: inset; }
-            QPushButton#stopButton { background: #7c3038; border-color: #93404a; color: white; font-weight: 600; }
-            QPushButton#stopButton:hover { background: #99404a; }
-            QPushButton#stopButton:pressed { background: #60232a; border-style: inset; }
-            QProgressBar { background: #0f1116; border: 1px solid #343a46; border-radius: 5px; }
-            QProgressBar::chunk { background: #4f6bed; border-radius: 4px; }
-            QPushButton#primaryButton:disabled, QPushButton#stopButton:disabled { background: #20232a; border-color: #2b303b; color: #666e7b; font-weight: 600; }
-            QStatusBar { color: #9ba5b5; }
-            QSplitter::handle { background: #262b35; width: 2px; }
-        """)
+        view_menu = self.menuBar().addMenu("View")
+        self.light_theme_action = QAction("Light theme", self)
+        self.light_theme_action.setCheckable(True)
+        self.light_theme_action.toggled.connect(
+            lambda checked: self._set_theme("light" if checked else "dark")
+        )
+        view_menu.addAction(self.light_theme_action)
+
+    def _set_theme(self, name, save=True):
+        """Apply a theme to the whole window, and save it as the user's choice."""
+        if name not in THEMES:
+            name = DEFAULT_THEME
+        self.theme = name
+        arrows = make_arrow_images(self._arrow_dir.path(), THEMES[name]["arrow"])
+        self.setStyleSheet(STYLESHEET.substitute(THEMES[name], **arrows))
+        # Keep both toggles in sync without triggering them again; the switch
+        # only animates when the user changes the theme.
+        self.theme_switch.set_colors(THEMES[name])
+        self.theme_switch.set_light(name == "light", animate=save)
+        self.theme_switch.setToolTip("Switch to the light theme" if name == "dark" else "Switch to the dark theme")
+        self.light_theme_action.blockSignals(True)
+        self.light_theme_action.setChecked(name == "light")
+        self.light_theme_action.blockSignals(False)
+        if save:
+            if not isinstance(self.config.get("settings"), dict):
+                self.config["settings"] = {}
+            self.config["settings"]["theme"] = name
+            self._persist()
 
     def _refresh_profiles(self, select_id=None):
         self.profile_list.blockSignals(True)
