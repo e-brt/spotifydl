@@ -10,9 +10,9 @@ from string import Template
 from PySide6.QtCore import (
     Qt, QPointF, QProcess, QProcessEnvironment, QRectF, QSize, QTemporaryDir, QTimer, QVariantAnimation
 )
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractButton, QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QAbstractButton, QApplication, QLayout, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QLineEdit,
     QSpinBox, QComboBox, QPlainTextEdit, QFileDialog, QMessageBox, QFormLayout,
     QSplitter, QGroupBox, QStatusBar, QInputDialog, QProgressBar
@@ -24,6 +24,7 @@ from worker import BITRATES, FORMATS, LOSSLESS_FORMATS, PROGRESS_PREFIX
 
 
 APP_NAME = "Spotify Playlist Downloader"
+MIN_WINDOW_WIDTH = 850
 # How long to wait for the worker to exit after Stop before killing it again.
 STOP_TIMEOUT_MS = 5000
 # Output formats spotDL can write; used to find tracks left incomplete by Stop.
@@ -287,7 +288,6 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.resize(1100, 820)
-        self.setMinimumSize(850, 600)
 
         self.config = load_config()
         self.process = None
@@ -321,6 +321,9 @@ class MainWindow(QMainWindow):
         outer = QVBoxLayout(central)
         outer.setContentsMargins(18, 18, 18, 18)
         outer.setSpacing(12)
+        # The window can never be smaller than this layout needs, so no field
+        # is ever squeezed. Qt keeps it up to date once the stylesheet applies.
+        outer.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         header = QHBoxLayout()
         title_box = QVBoxLayout()
@@ -341,6 +344,8 @@ class MainWindow(QMainWindow):
         outer.addLayout(header)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        # Below this width the form gets cramped.
+        splitter.setMinimumWidth(MIN_WINDOW_WIDTH - 2 * 18)
         outer.addWidget(splitter, 3)
 
         # Left pane: saved profiles
@@ -479,6 +484,9 @@ class MainWindow(QMainWindow):
         self.logs.setReadOnly(True)
         self.logs.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.logs.setFont(QFont("Consolas", 9))
+        # The logs scroll, so they can shrink more than the form when the
+        # window is small.
+        self.logs.setMinimumHeight(60)
         self.logs.document().setMaximumBlockCount(5000)
         logs_layout.addWidget(self.logs)
         outer.addWidget(logs_group, 2)
@@ -489,12 +497,19 @@ class MainWindow(QMainWindow):
         file_menu.addAction(open_config_action)
 
         view_menu = self.menuBar().addMenu("View")
-        self.light_theme_action = QAction("Light theme", self)
-        self.light_theme_action.setCheckable(True)
-        self.light_theme_action.toggled.connect(
-            lambda checked: self._set_theme("light" if checked else "dark")
-        )
-        view_menu.addAction(self.light_theme_action)
+        theme_menu = view_menu.addMenu("Theme")
+        # Exclusive group: exactly one theme is checked.
+        theme_group = QActionGroup(self)
+        theme_group.setExclusive(True)
+        self.theme_actions = {}
+        for name, label in (("light", "Light"), ("dark", "Dark")):
+            action = QAction(label, self)
+            action.setCheckable(True)
+            # triggered is only emitted by the user, not by setChecked().
+            action.triggered.connect(lambda checked=False, theme=name: self._set_theme(theme))
+            theme_group.addAction(action)
+            theme_menu.addAction(action)
+            self.theme_actions[name] = action
 
     def _set_theme(self, name, save=True):
         """Apply a theme to the whole window, and save it as the user's choice."""
@@ -508,9 +523,7 @@ class MainWindow(QMainWindow):
         self.theme_switch.set_colors(THEMES[name])
         self.theme_switch.set_light(name == "light", animate=save)
         self.theme_switch.setToolTip("Switch to the light theme" if name == "dark" else "Switch to the dark theme")
-        self.light_theme_action.blockSignals(True)
-        self.light_theme_action.setChecked(name == "light")
-        self.light_theme_action.blockSignals(False)
+        self.theme_actions[name].setChecked(True)
         if save:
             if not isinstance(self.config.get("settings"), dict):
                 self.config["settings"] = {}

@@ -20,7 +20,7 @@ class ThemeTests(AppTestCase):
         window = self.window_with({"theme": "light"})
         self.assertEqual(window.theme, "light")
         self.assertIn(app.THEMES["light"]["window"], window.styleSheet())
-        self.assertTrue(window.light_theme_action.isChecked())
+        self.assert_menu_checked(window, "light")
         self.assertTrue(window.theme_switch.isChecked())
         self.assertEqual(window.theme_switch._position, 1.0, "no animation at startup")
         self.assertEqual(self.saved_configs, [], "startup must not rewrite the configuration")
@@ -31,22 +31,40 @@ class ThemeTests(AppTestCase):
                 window = self.window_with(settings)
                 self.assertEqual(window.theme, "dark")
                 self.assertIn(app.THEMES["dark"]["window"], window.styleSheet())
+                self.assert_menu_checked(window, "dark")
 
     def test_switch_changes_and_saves_the_theme(self):
         window = self.window_with({"theme": "light"})
         window.theme_switch.click()
         self.assertEqual(window.theme, "dark")
         self.assertEqual(self.saved_configs[-1]["settings"]["theme"], "dark")
-        self.assertFalse(window.light_theme_action.isChecked())
+        self.assert_menu_checked(window, "dark")
         self.assertTrue(self.wait(lambda: window.theme_switch._position == 0.0, 1), "knob animation")
         self.assertIn("light", window.theme_switch.toolTip())
 
-    def test_menu_action_changes_the_theme_and_moves_the_switch(self):
+    def test_menu_actions_change_the_theme_and_move_the_switch(self):
         window = self.window_with({"theme": "dark"})
-        window.light_theme_action.trigger()
+        window.theme_actions["light"].trigger()
         self.assertEqual(window.theme, "light")
         self.assertEqual(self.saved_configs[-1]["settings"]["theme"], "light")
+        self.assert_menu_checked(window, "light")
         self.assertTrue(window.theme_switch.isChecked())
+        window.theme_actions["dark"].trigger()
+        self.assertEqual(window.theme, "dark")
+        self.assertEqual(self.saved_configs[-1]["settings"]["theme"], "dark")
+        self.assert_menu_checked(window, "dark")
+        self.assertFalse(window.theme_switch.isChecked())
+
+    def test_choosing_the_current_theme_keeps_it_checked(self):
+        window = self.window_with({"theme": "dark"})
+        window.theme_actions["dark"].trigger()
+        self.assertEqual(window.theme, "dark")
+        self.assert_menu_checked(window, "dark")
+
+    def assert_menu_checked(self, window, name):
+        """Exactly one Theme menu entry is checked: the given one."""
+        checked = [theme for theme, action in window.theme_actions.items() if action.isChecked()]
+        self.assertEqual(checked, [name])
 
     def test_saving_the_theme_keeps_the_profiles(self):
         window = self.window_with({"theme": "dark"})
