@@ -1,6 +1,6 @@
 # Spotify Playlist Downloader — Project Specification
 
-Current state of the project, as of version **1.1.0** (2026-10-25). The
+Current state of the project, as of version **1.2.0** (2026-10-25). The
 README explains how to install, run, test, build and release;
 `CHANGELOG.md` lists the changes of each version. This document describes
 what the application does, how it is built, the decisions behind it and what
@@ -374,7 +374,8 @@ tests):
   tag matches `src\version.py`, and publishes a GitHub Release with the zip,
   its SHA-256 and the changelog section as release notes. The workflow can
   also be run by hand to only build the archive.
-- Published: **1.0.0** and **1.1.0**.
+- Published versions are on the repository's Releases page; `CHANGELOG.md`
+  describes each of them.
 
 ### 7.5 Licensing
 
