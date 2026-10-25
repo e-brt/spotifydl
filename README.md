@@ -22,7 +22,7 @@ Prebuilt Windows releases are on the repository's [Releases page](../../releases
 ## Requirements to build from source
 
 - Windows 10 or Windows 11
-- Python 3.10
+- Python 3.13 (spotDL supports 3.10 to 3.14)
 - Internet access to download the vendor executables
 
 ## Prepare the vendor directory
@@ -41,8 +41,8 @@ Open PowerShell in the project directory:
 
 ```powershell
 cd D:\Documents\spotifydl
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+py -3.13 -m venv venv
+.\venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
@@ -51,10 +51,10 @@ If PowerShell blocks activation scripts, allow them for the current terminal pro
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\.venv\Scripts\Activate.ps1
+.\venv\Scripts\Activate.ps1
 ```
 
-In Command Prompt, use `.venv\Scripts\activate.bat` instead.
+In Command Prompt, use `venv\Scripts\activate.bat` instead. `py -3.13` goes through the Python launcher, so the virtual environment gets Python 3.13 even if `python` points to another version.
 
 `requirements.txt` pins the exact version of every package. The worker patches internals of spotDL and some of its dependencies, so upgrade packages on purpose, run a download, then update the pins (see the comment at the top of `requirements.txt`).
 

@@ -21,6 +21,7 @@ version that has no section here.
 
 ### Changed
 - The code is in `src\`; run it from source with `python src\main.py`.
+- Built with Python 3.13 instead of 3.10, whose support yt-dlp is dropping.
 
 ## [1.0.0] - 2026-10-25
 
