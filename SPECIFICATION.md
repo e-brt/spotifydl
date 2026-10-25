@@ -311,7 +311,7 @@ The profile thread count therefore only limits actual downloads, which is what t
 
 Even with the shared session, one run cost about 3 Spotify web player requests per track (about 600 for a 194-track playlist) plus about 80 to load the session. A dozen full runs within an hour got the IP rate limited again (HTTP 429), which blocks every run until it lifts.
 
-spotDL's own cache file only works with the official Spotify API, so the worker keeps its own cache in `spotify_cache.json`, next to `config.json` (beside the executable, or beside `app.py` when running from source). Like the configuration, it is lost if the build output folder is wiped:
+spotDL's own cache file only works with the official Spotify API, so the worker keeps its own cache in `spotify_cache.json`, next to `config.json` in `data\` (beside the executable, or beside `app.py` when running from source). Like the configuration, it is lost if the build output folder is wiped:
 - **Track metadata** (`Song.from_url`, used by spotDL wherever it completes a track) is stored per Spotify track id and reused for `TRACK_CACHE_DAYS` (30) days.
 - **Web player query hashes** are stored with the URL of the web player's main JavaScript file, and reused until Spotify deploys a new build (the URL changes). Only the `"name","query|mutation","hash"` entries spotapi looks up are kept.
 - **The playlist itself is always fetched again**, so added or removed tracks are seen.

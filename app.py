@@ -1041,7 +1041,7 @@ def about_text():
         f"<p>Version {__version__}<br>spotDL {spotdl_version}</p>"
         "<p>Released under the MIT License.</p>"
         "<p>Bundled software (spotDL, yt-dlp, Qt for Python, FFmpeg, Deno) keeps its own "
-        "license: see THIRD_PARTY_NOTICES.md next to the executable.</p>"
+        "license: see docs\\THIRD_PARTY_NOTICES.md next to the executable.</p>"
     )
 
 

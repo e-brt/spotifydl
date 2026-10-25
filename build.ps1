@@ -8,12 +8,13 @@
     2. Downloads or checks the vendor executables with fetch_vendor.ps1.
     3. Checks that the installed Python packages match requirements.txt, then
        runs the tests in tests\ (skip them with -SkipTests).
-    4. Sets aside the user files of the previous build (config.json,
-       spotify_cache.json), which PyInstaller deletes with the output folder.
+    4. Sets aside the user files of the previous build (data\config.json,
+       data\spotify_cache.json), which PyInstaller deletes with the output
+       folder.
     5. Runs PyInstaller, with the version in the executable's file properties,
        then puts the user files back, even if the build fails.
     6. Adds LICENSE, CHANGELOG.md, THIRD_PARTY_NOTICES.md and the third-party
-       license texts next to the executable.
+       license texts in docs\ next to the executable.
     7. Checks the output and runs the packaged worker's self-check.
     8. With -Package, writes dist\SpotifyDownloader-<version>-win64.zip
        (without the user files) and its SHA-256.
@@ -45,9 +46,13 @@ $AppName = "SpotifyDownloader"
 $ProductName = "Spotify Playlist Downloader"
 $OutputDir = Join-Path $PSScriptRoot "dist\$AppName"
 $VendorFiles = @("deno.exe", "ffmpeg.exe", "ffprobe.exe")
-# Files written next to the executable at run time, see config_manager.py.
-$UserFiles = @("config.json", "config.json.broken", "spotify_cache.json")
+# Files written at run time in data\ (see config_manager.py), relative to the
+# output folder. Versions before data\ wrote them next to the executable; they
+# are kept too, and the application moves them on its next start.
+$UserFileNames = @("config.json", "config.json.broken", "spotify_cache.json")
+$UserFiles = @($UserFileNames | ForEach-Object { "data\$_" }) + $UserFileNames
 $Documents = @("LICENSE", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md")
+$DocsDir = Join-Path $OutputDir "docs"
 $CollectAll = @("spotdl", "yt_dlp", "syncedlyrics", "pykakasi", "ytmusicapi", "babel")
 
 function Write-Step([string]$Message) {
@@ -150,8 +155,9 @@ $kept = @()
 foreach ($name in $UserFiles) {
     $source = Join-Path $OutputDir $name
     if (Test-Path -LiteralPath $source -PathType Leaf) {
-        New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
-        Copy-Item -LiteralPath $source -Destination $backupDir
+        $backup = Join-Path $backupDir $name
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $backup) | Out-Null
+        Copy-Item -LiteralPath $source -Destination $backup
         $kept += $name
         Write-Host "  kept $name"
     }
@@ -211,9 +217,10 @@ try {
 finally {
     $ErrorActionPreference = "Stop"
     if ($kept.Count -gt 0) {
-        New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
         foreach ($name in $kept) {
-            Copy-Item -LiteralPath (Join-Path $backupDir $name) -Destination $OutputDir -Force
+            $destination = Join-Path $OutputDir $name
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+            Copy-Item -LiteralPath (Join-Path $backupDir $name) -Destination $destination -Force
         }
         Write-Host ""
         Write-Host "Restored $($kept -join ', ') to $OutputDir"
@@ -231,16 +238,18 @@ if ($buildExitCode -ne 0) {
 
 # --- 6. License files and documents ------------------------------------------------
 Write-Step "Adding licenses and documents"
+# In docs\, so that the folder of the executable stays uncluttered.
+New-Item -ItemType Directory -Force -Path $DocsDir | Out-Null
 foreach ($name in $Documents) {
-    Copy-Item -LiteralPath $name -Destination $OutputDir -Force
+    Copy-Item -LiteralPath $name -Destination $DocsDir -Force
 }
-$licensesDir = Join-Path $OutputDir "licenses"
-Copy-Item -LiteralPath "vendor\licenses" -Destination $OutputDir -Recurse -Force
+$licensesDir = Join-Path $DocsDir "licenses"
+Copy-Item -LiteralPath "vendor\licenses" -Destination $DocsDir -Recurse -Force
 & $Python tools\collect_licenses.py requirements.txt (Join-Path $licensesDir "python")
 if ($LASTEXITCODE -ne 0) {
     Stop-Build "Could not collect the Python package licenses."
 }
-Write-Host "  $($Documents -join ', ') and licenses\ added."
+Write-Host "  $($Documents -join ', ') and licenses\ added to docs\."
 
 # --- 7. Check the result -----------------------------------------------------------
 Write-Step "Checking the build"
@@ -250,7 +259,7 @@ foreach ($name in $VendorFiles) {
     $expectedFiles += Join-Path $OutputDir "_internal\vendor\$name"
 }
 foreach ($name in $Documents) {
-    $expectedFiles += Join-Path $OutputDir $name
+    $expectedFiles += Join-Path $DocsDir $name
 }
 $expectedFiles += @(
     (Join-Path $licensesDir "ffmpeg\LICENSE.txt"),
@@ -291,7 +300,7 @@ if ($Package) {
         foreach ($file in (Get-ChildItem -LiteralPath $OutputDir -Recurse -File)) {
             $relative = $file.FullName.Substring($OutputDir.Length + 1)
             # Never ship the profiles or cache of the machine that built it.
-            if ($UserFiles -contains $relative) { continue }
+            if ($UserFiles -contains $relative -or $relative -like "data\*") { continue }
             $entry = "$archiveName/" + ($relative -replace "\\", "/")
             [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
                 $zip, $file.FullName, $entry, [IO.Compression.CompressionLevel]::Optimal) | Out-Null

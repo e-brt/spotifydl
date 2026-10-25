@@ -2,8 +2,9 @@
 
 Spotify Playlist Downloader is released under the MIT License (see `LICENSE`).
 The packaged application also contains the software below, which keeps its own
-license. The full license texts are in the `licenses` folder next to the
-executable.
+license. In the packaged application, this file, `LICENSE` and the `licenses`
+folder with the full license texts are in the `docs` folder next to the
+executable; the paths below are relative to that folder.
 
 ## Executables in `_internal\vendor`
 

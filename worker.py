@@ -44,8 +44,8 @@ BLOCKED_VIDEO_ERRORS = re.compile(
 )
 # How many other search results to try after a blocked video.
 MAX_ALTERNATIVE_RESULTS = 3
-# Spotify data cached between runs (see SpotifyCache), stored next to the
-# configuration file: beside the executable, or beside app.py from source.
+# Spotify data cached between runs (see SpotifyCache), stored with the
+# configuration in data\ (see config_manager.config_dir).
 CACHE_FILENAME = "spotify_cache.json"
 TRACK_CACHE_DAYS = 30
 SPOTIFY_TRACK_URL = re.compile(r"open\.spotify\.com/(?:intl-[\w-]+/)?track/(\w+)")

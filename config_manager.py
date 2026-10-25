@@ -5,20 +5,49 @@ from pathlib import Path
 
 
 CONFIG_FILENAME = "config.json"
+# Folder next to the executable (or app.py) holding the user's files.
+DATA_DIRNAME = "data"
+# Files written at run time; earlier versions kept them next to the executable.
+USER_FILES = ("config.json", "config.json.broken", "spotify_cache.json")
 # spotDL's own defaults, so existing libraries are not downloaded again.
 DEFAULT_FORMAT = "mp3"
 DEFAULT_BITRATE = "128k"
 
+_migrated = False
+
+
+def app_dir():
+    """Folder of the executable, or of app.py when running from source."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
 
 def config_dir():
-    """Store the configuration next to the executable or source entry point."""
-    if getattr(sys, "frozen", False):
-        base = Path(sys.executable).resolve().parent
-    else:
-        base = Path(__file__).resolve().parent
-
+    """Folder of the user's files (configuration, Spotify cache): data\\ next
+    to the executable or source entry point."""
+    global _migrated
+    base = app_dir() / DATA_DIRNAME
     base.mkdir(parents=True, exist_ok=True)
+    if not _migrated:
+        _migrated = True
+        migrate_user_files(app_dir(), base)
     return base
+
+
+def migrate_user_files(old_dir, new_dir):
+    """Move user files left next to the executable by an earlier version.
+
+    A file already present in the new folder is kept, and the old one is
+    then left untouched: nothing is ever overwritten or deleted.
+    """
+    for name in USER_FILES:
+        old, new = Path(old_dir) / name, Path(new_dir) / name
+        if old.is_file() and not new.exists():
+            try:
+                old.replace(new)
+            except OSError:
+                pass
 
 
 def config_path():
