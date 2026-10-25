@@ -5,6 +5,9 @@ from pathlib import Path
 
 
 CONFIG_FILENAME = "config.json"
+# spotDL's own defaults, so existing libraries are not downloaded again.
+DEFAULT_FORMAT = "mp3"
+DEFAULT_BITRATE = "128k"
 
 
 def config_dir():
@@ -33,6 +36,8 @@ def default_config():
                 "url": "",
                 "destination": str(Path.home() / "Music"),
                 "threads": 1,
+                "format": DEFAULT_FORMAT,
+                "bitrate": DEFAULT_BITRATE,
             }
         ],
     }
@@ -62,6 +67,8 @@ def load_config():
             profile.setdefault("url", "")
             profile.setdefault("destination", str(Path.home() / "Music"))
             profile.setdefault("threads", 1)
+            profile.setdefault("format", DEFAULT_FORMAT)
+            profile.setdefault("bitrate", DEFAULT_BITRATE)
 
         return config
 

@@ -10,12 +10,13 @@ from PySide6.QtGui import QAction, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QLineEdit,
-    QSpinBox, QPlainTextEdit, QFileDialog, QMessageBox, QFormLayout,
+    QSpinBox, QComboBox, QPlainTextEdit, QFileDialog, QMessageBox, QFormLayout,
     QSplitter, QGroupBox, QStatusBar, QInputDialog
 )
 
-from config_manager import load_config, save_config, config_path
+from config_manager import DEFAULT_BITRATE, DEFAULT_FORMAT, load_config, save_config, config_path
 from process_control import ProcessTree, is_file_in_use
+from worker import BITRATES, FORMATS, LOSSLESS_FORMATS
 
 
 APP_NAME = "Spotify Playlist Downloader"
@@ -38,51 +39,11 @@ def resource_path(*parts):
     return base.joinpath(*parts)
 
 
-def hide_child_consoles():
-    """Start every console child (FFmpeg, FFprobe, Deno) without a window.
-
-    In the packaged windowed build the worker has no console, so Windows opens
-    a new, visible console for each console program spotDL starts, which then
-    flashes on screen. spotDL and yt-dlp do not pass CREATE_NO_WINDOW, so it is
-    added here to every subprocess.Popen, which asyncio subprocesses also use.
-    """
-    if sys.platform != "win32":
-        return
-    import subprocess
-
-    original_init = subprocess.Popen.__init__
-
-    def __init__(self, *args, **kwargs):
-        flags = kwargs.get("creationflags", 0)
-        if not flags & (subprocess.CREATE_NEW_CONSOLE | subprocess.DETACHED_PROCESS):
-            kwargs["creationflags"] = flags | subprocess.CREATE_NO_WINDOW
-        original_init(self, *args, **kwargs)
-
-    subprocess.Popen.__init__ = __init__
-
-
 def run_spotdl_worker():
     """Run spotDL in a child process so the GUI can capture logs and stop it."""
-    from pathlib import Path
+    import worker
 
-    home_value = (
-        os.environ.get("USERPROFILE")
-        or os.environ.get("HOME")
-        or str(Path(sys.executable).resolve().parent)
-    )
-
-    os.environ["HOME"] = home_value
-    os.environ["USERPROFILE"] = home_value
-
-    hide_child_consoles()
-
-    args = sys.argv[2:]
-    sys.argv = ["spotdl"] + args
-
-    from spotdl.console.entry_point import console_entry_point
-
-    console_entry_point()
-
+    worker.run(sys.argv[2:])
 
 
 class MainWindow(QMainWindow):
@@ -182,11 +143,28 @@ class MainWindow(QMainWindow):
         self.threads_spin = QSpinBox()
         self.threads_spin.setRange(1, 16)
         self.threads_spin.setValue(1)
-        self.threads_spin.setToolTip("Lower values can help reduce rate limiting from audio providers.")
+        self.threads_spin.setToolTip(
+            "Number of tracks downloaded at the same time. Lower values can help reduce "
+            "rate limiting from audio providers. Checking existing files always uses more threads."
+        )
+
+        self.format_combo = QComboBox()
+        self.format_combo.addItems(FORMATS)
+        self.format_combo.setToolTip("Audio format of the downloaded files.")
+        self.format_combo.currentTextChanged.connect(self._format_changed)
+        self.bitrate_combo = QComboBox()
+        self.bitrate_combo.addItems(BITRATES)
+        self.bitrate_combo.setToolTip(
+            "auto keeps the bitrate of the YouTube source (usually 128k to 160k).\n"
+            "Higher values make larger files but cannot add quality the source does not have.\n"
+            "Existing files below the selected bitrate are downloaded again."
+        )
 
         form.addRow("Profile name", self.name_edit)
         form.addRow("Spotify playlist URL", self.url_edit)
         form.addRow("Destination folder", dest_widget)
+        form.addRow("Audio format", self.format_combo)
+        form.addRow("Bitrate", self.bitrate_combo)
         form.addRow("Download threads", self.threads_spin)
         right_layout.addWidget(settings_group)
 
@@ -247,7 +225,7 @@ class MainWindow(QMainWindow):
             QLabel#statusPill { background: #263a32; color: #7fe0a5; padding: 7px 12px; border-radius: 10px; font-weight: 600; }
             QGroupBox { border: 1px solid #343a46; border-radius: 10px; margin-top: 12px; padding: 12px; font-weight: 600; }
             QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; color: #bfc8d8; }
-            QLineEdit, QSpinBox, QListWidget, QPlainTextEdit { background: #0f1116; border: 1px solid #343a46; border-radius: 6px; padding: 8px; selection-background-color: #4361ee; }
+            QLineEdit, QSpinBox, QComboBox, QListWidget, QPlainTextEdit { background: #0f1116; border: 1px solid #343a46; border-radius: 6px; padding: 8px; selection-background-color: #4361ee; }
             QListWidget::item { padding: 10px; border-radius: 5px; }
             QListWidget::item:selected { background: #29344c; color: #ffffff; }
             QPushButton { background: #2b303b; border: 1px solid #414958; border-radius: 6px; padding: 9px 12px; }
@@ -299,6 +277,8 @@ class MainWindow(QMainWindow):
         self.url_edit.setText(profile.get("url", ""))
         self.destination_edit.setText(profile.get("destination", ""))
         self.threads_spin.setValue(int(profile.get("threads", 1)))
+        self._set_combo(self.format_combo, profile.get("format"), DEFAULT_FORMAT)
+        self._set_combo(self.bitrate_combo, profile.get("bitrate"), DEFAULT_BITRATE)
         self._loading_profile = False
 
     def _clear_form(self):
@@ -307,7 +287,18 @@ class MainWindow(QMainWindow):
         self.url_edit.clear()
         self.destination_edit.clear()
         self.threads_spin.setValue(1)
+        self._set_combo(self.format_combo, DEFAULT_FORMAT, DEFAULT_FORMAT)
+        self._set_combo(self.bitrate_combo, DEFAULT_BITRATE, DEFAULT_BITRATE)
         self._loading_profile = False
+
+    @staticmethod
+    def _set_combo(combo, value, default):
+        index = combo.findText(str(value))
+        combo.setCurrentIndex(index if index >= 0 else combo.findText(default))
+
+    def _format_changed(self, audio_format):
+        # Lossless formats have no bitrate to choose.
+        self.bitrate_combo.setEnabled(audio_format not in LOSSLESS_FORMATS)
 
     def _new_profile(self):
         if self.process and self.process.state() != QProcess.ProcessState.NotRunning:
@@ -323,6 +314,8 @@ class MainWindow(QMainWindow):
             "url": "",
             "destination": str(Path.home() / "Music" / name),
             "threads": 1,
+            "format": DEFAULT_FORMAT,
+            "bitrate": DEFAULT_BITRATE,
         }
         self.config.setdefault("profiles", []).append(profile)
         self._persist()
@@ -369,6 +362,8 @@ class MainWindow(QMainWindow):
         profile["url"] = self.url_edit.text().strip()
         profile["destination"] = self.destination_edit.text().strip()
         profile["threads"] = self.threads_spin.value()
+        profile["format"] = self.format_combo.currentText()
+        profile["bitrate"] = self.bitrate_combo.currentText()
         self._persist()
         self._refresh_profiles(profile["id"])
         self.statusBar().showMessage("Profile saved.", 4000)
@@ -413,11 +408,10 @@ class MainWindow(QMainWindow):
             return
 
         args = [
-        #   "--log-level", "DEBUG",
-            "--overwrite", "skip",
-            "--scan-for-songs",
+            "--url", profile["url"],
+            "--format", profile.get("format", DEFAULT_FORMAT),
+            "--bitrate", profile.get("bitrate", DEFAULT_BITRATE),
             "--threads", str(profile.get("threads", 1)),
-            "download", profile["url"]
         ]
 
         process = QProcess(self)
@@ -454,7 +448,11 @@ class MainWindow(QMainWindow):
 
         self.logs.appendPlainText(f"\n> Starting profile: {profile['name']}")
         self.logs.appendPlainText(f"> Destination: {destination}")
-        self.logs.appendPlainText(f"> Threads: {profile.get('threads', 1)}\n")
+        quality = profile.get("format", DEFAULT_FORMAT)
+        if quality not in LOSSLESS_FORMATS:
+            quality += f", {profile.get('bitrate', DEFAULT_BITRATE)}"
+        self.logs.appendPlainText(f"> Quality: {quality}")
+        self.logs.appendPlainText(f"> Download threads: {profile.get('threads', 1)}\n")
         self.log_state.setText("Downloading…")
         self.status_label.setText("Running")
         self.start_button.setEnabled(False)
