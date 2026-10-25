@@ -3,13 +3,20 @@
     Builds dist\SpotifyDownloader\SpotifyDownloader.exe with PyInstaller.
 
 .DESCRIPTION
-    1. Checks that vendor\ contains working deno.exe, ffmpeg.exe and ffprobe.exe.
-    2. Checks that the installed Python packages match requirements.txt, then
+    1. Reads the version from version.py and checks that CHANGELOG.md has a
+       section for it.
+    2. Downloads or checks the vendor executables with fetch_vendor.ps1.
+    3. Checks that the installed Python packages match requirements.txt, then
        runs the tests in tests\ (skip them with -SkipTests).
-    3. Sets aside the user files of the previous build (config.json,
+    4. Sets aside the user files of the previous build (config.json,
        spotify_cache.json), which PyInstaller deletes with the output folder.
-    4. Runs PyInstaller, then puts the user files back, even if the build fails.
-    5. Checks the output and runs the packaged worker's self-check.
+    5. Runs PyInstaller, with the version in the executable's file properties,
+       then puts the user files back, even if the build fails.
+    6. Adds LICENSE, CHANGELOG.md, THIRD_PARTY_NOTICES.md and the third-party
+       license texts next to the executable.
+    7. Checks the output and runs the packaged worker's self-check.
+    8. With -Package, writes dist\SpotifyDownloader-<version>-win64.zip
+       (without the user files) and its SHA-256.
 
 .PARAMETER Python
     Python interpreter to build with. Defaults to venv\Scripts\python.exe,
@@ -18,23 +25,29 @@
 .PARAMETER SkipTests
     Build without running the tests.
 
+.PARAMETER Package
+    Also create the release archive.
+
 .EXAMPLE
-    .\build.ps1
+    .\build.ps1 -Package
 #>
 [CmdletBinding()]
 param(
     [string]$Python,
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [switch]$Package
 )
 
 $ErrorActionPreference = "Stop"
 Set-Location -LiteralPath $PSScriptRoot
 
 $AppName = "SpotifyDownloader"
+$ProductName = "Spotify Playlist Downloader"
 $OutputDir = Join-Path $PSScriptRoot "dist\$AppName"
 $VendorFiles = @("deno.exe", "ffmpeg.exe", "ffprobe.exe")
 # Files written next to the executable at run time, see config_manager.py.
 $UserFiles = @("config.json", "config.json.broken", "spotify_cache.json")
+$Documents = @("LICENSE", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md")
 $CollectAll = @("spotdl", "yt_dlp", "syncedlyrics", "pykakasi", "ytmusicapi", "babel")
 
 function Write-Step([string]$Message) {
@@ -62,26 +75,27 @@ if (-not $Python -or -not (Test-Path -LiteralPath $Python)) {
 }
 Write-Host "Python: $Python"
 
-# --- 1. Vendor binaries ----------------------------------------------------------
-Write-Step "Checking vendor binaries"
-foreach ($name in $VendorFiles) {
-    $path = Join-Path "vendor" $name
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        Stop-Build "Missing $path. See 'Prepare the vendor directory' in README.md."
-    }
-    if ((Get-Item -LiteralPath $path).Length -eq 0) {
-        Stop-Build "$path is empty."
-    }
-    # Running it proves it is a working executable for this machine.
-    $versionFlag = if ($name -eq "deno.exe") { "--version" } else { "-version" }
-    $output = & $path $versionFlag
-    if ($LASTEXITCODE -ne 0) {
-        Stop-Build "$path does not run ('$versionFlag' exited with code $LASTEXITCODE)."
-    }
-    Write-Host ("  {0,-11} {1}" -f $name, ($output | Select-Object -First 1))
+# --- 1. Version -----------------------------------------------------------------
+Write-Step "Checking the version"
+$version = "$(& $Python -c 'from version import __version__; print(__version__)')".Trim()
+if ($version -notmatch "^(\d+)\.(\d+)\.(\d+)([-+][0-9A-Za-z.-]+)?$") {
+    Stop-Build "version.py: '$version' is not a MAJOR.MINOR.PATCH version."
+}
+$fileVersion = @([int]$Matches[1], [int]$Matches[2], [int]$Matches[3], 0)
+$changelogHeading = "## [$version]"
+if (-not (Select-String -LiteralPath "CHANGELOG.md" -SimpleMatch -Pattern $changelogHeading -Quiet)) {
+    Stop-Build "CHANGELOG.md has no '$changelogHeading' section. Describe the changes of this version first."
+}
+Write-Host "  Version $version, described in CHANGELOG.md."
+
+# --- 2. Vendor executables ------------------------------------------------------
+Write-Step "Fetching and checking vendor executables (vendor.json)"
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "fetch_vendor.ps1")
+if ($LASTEXITCODE -ne 0) {
+    Stop-Build "Could not get the vendor executables listed in vendor.json."
 }
 
-# --- 2. Python packages --------------------------------------------------------
+# --- 3. Python packages and tests ------------------------------------------------
 Write-Step "Checking Python packages against requirements.txt"
 $installed = @{}
 foreach ($line in (& $Python -m pip freeze --all)) {
@@ -129,7 +143,7 @@ else {
     }
 }
 
-# --- 3. Set aside the user files -------------------------------------------------
+# --- 4. Set aside the user files -------------------------------------------------
 Write-Step "Keeping user files from the previous build"
 $backupDir = Join-Path ([IO.Path]::GetTempPath()) ("$AppName-build-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
 $kept = @()
@@ -146,15 +160,41 @@ if ($kept.Count -eq 0) {
     Write-Host "  No previous user files."
 }
 
-# --- 4. Build, then put the user files back ----------------------------------------
+# --- 5. Build, then put the user files back ----------------------------------------
 Write-Step "Running PyInstaller"
+# Windows file properties (Details tab) of the executable.
+$versionTuple = $fileVersion -join ", "
+$versionInfo = @"
+VSVersionInfo(
+  ffi=FixedFileInfo(filevers=($versionTuple), prodvers=($versionTuple), mask=0x3f, flags=0x0,
+                    OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
+  kids=[
+    StringFileInfo([StringTable('040904B0', [
+      StringStruct('FileDescription', '$ProductName'),
+      StringStruct('FileVersion', '$version'),
+      StringStruct('InternalName', '$AppName'),
+      StringStruct('LegalCopyright', 'Copyright (c) $((Get-Date).Year). MIT License.'),
+      StringStruct('OriginalFilename', '$AppName.exe'),
+      StringStruct('ProductName', '$ProductName'),
+      StringStruct('ProductVersion', '$version')])]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
+"@
+New-Item -ItemType Directory -Force -Path "build" | Out-Null
+$versionFile = Join-Path $PSScriptRoot "build\version_info.txt"
+# No byte order mark: PyInstaller evaluates this file as Python.
+[IO.File]::WriteAllText($versionFile, $versionInfo)
+
 $arguments = @(
     "-m", "PyInstaller", "--clean", "--noconfirm", "--windowed",
     "--icon", "assets\spotifydownloader.ico",
+    "--version-file", $versionFile,
     "--name", $AppName
 )
-foreach ($package in $CollectAll) {
-    $arguments += @("--collect-all", $package)
+# Not $package: PowerShell names are case-insensitive and -Package is a switch.
+foreach ($collected in $CollectAll) {
+    $arguments += @("--collect-all", $collected)
 }
 foreach ($name in $VendorFiles) {
     $arguments += @("--add-binary", "vendor\$name;vendor")
@@ -189,19 +229,44 @@ if ($buildExitCode -ne 0) {
     Stop-Build "PyInstaller failed with exit code $buildExitCode."
 }
 
-# --- 5. Check the result -----------------------------------------------------------
+# --- 6. License files and documents ------------------------------------------------
+Write-Step "Adding licenses and documents"
+foreach ($name in $Documents) {
+    Copy-Item -LiteralPath $name -Destination $OutputDir -Force
+}
+$licensesDir = Join-Path $OutputDir "licenses"
+Copy-Item -LiteralPath "vendor\licenses" -Destination $OutputDir -Recurse -Force
+& $Python tools\collect_licenses.py requirements.txt (Join-Path $licensesDir "python")
+if ($LASTEXITCODE -ne 0) {
+    Stop-Build "Could not collect the Python package licenses."
+}
+Write-Host "  $($Documents -join ', ') and licenses\ added."
+
+# --- 7. Check the result -----------------------------------------------------------
 Write-Step "Checking the build"
 $exe = Join-Path $OutputDir "$AppName.exe"
 $expectedFiles = @($exe, (Join-Path $OutputDir "_internal\assets\spotifydownloader.ico"))
 foreach ($name in $VendorFiles) {
     $expectedFiles += Join-Path $OutputDir "_internal\vendor\$name"
 }
+foreach ($name in $Documents) {
+    $expectedFiles += Join-Path $OutputDir $name
+}
+$expectedFiles += @(
+    (Join-Path $licensesDir "ffmpeg\LICENSE.txt"),
+    (Join-Path $licensesDir "deno\LICENSE.md"),
+    (Join-Path $licensesDir "python\SUMMARY.txt")
+)
 foreach ($path in $expectedFiles) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         Stop-Build "Missing from the build: $path"
     }
 }
-Write-Host "  Executable, icon and vendor binaries are present."
+$exeVersion = (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
+if ($exeVersion -ne $version) {
+    Stop-Build "The executable reports version '$exeVersion' instead of '$version'."
+}
+Write-Host "  Executable (version $exeVersion), icon, vendor binaries, documents and licenses are present."
 
 # The executable is windowed: start it with redirected output to read the result.
 $selfCheckLog = Join-Path ([IO.Path]::GetTempPath()) "$AppName-self-check.txt"
@@ -214,5 +279,33 @@ if ($process.ExitCode -ne 0) {
 }
 Write-Host "  $selfCheckOutput"
 
+# --- 8. Release archive ------------------------------------------------------------
+if ($Package) {
+    Write-Step "Creating the release archive"
+    Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+    $archiveName = "$AppName-$version-win64"
+    $archive = Join-Path $PSScriptRoot "dist\$archiveName.zip"
+    Remove-Item -LiteralPath $archive, "$archive.sha256" -Force -ErrorAction SilentlyContinue
+    $zip = [IO.Compression.ZipFile]::Open($archive, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($file in (Get-ChildItem -LiteralPath $OutputDir -Recurse -File)) {
+            $relative = $file.FullName.Substring($OutputDir.Length + 1)
+            # Never ship the profiles or cache of the machine that built it.
+            if ($UserFiles -contains $relative) { continue }
+            $entry = "$archiveName/" + ($relative -replace "\\", "/")
+            [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                $zip, $file.FullName, $entry, [IO.Compression.CompressionLevel]::Optimal) | Out-Null
+        }
+    }
+    finally {
+        $zip.Dispose()
+    }
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+    [IO.File]::WriteAllText("$archive.sha256", "$hash  $archiveName.zip`n")
+    $sizeMb = [math]::Round((Get-Item -LiteralPath $archive).Length / 1MB)
+    Write-Host "  $archive ($sizeMb MB)"
+    Write-Host "  SHA-256 $hash"
+}
+
 Write-Host ""
-Write-Host "Build complete: $exe" -ForegroundColor Green
+Write-Host "Build complete: $exe (version $version)" -ForegroundColor Green

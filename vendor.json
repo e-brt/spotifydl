@@ -1,0 +1,54 @@
+{
+  "_comment": "External executables bundled with the application. fetch_vendor.ps1 downloads each archive from its pinned URL, checks every SHA-256 below and copies the files to vendor\\. To upgrade a component, change its version, URLs and all its hashes together, then run the tests and a real download.",
+  "components": [
+    {
+      "name": "deno",
+      "version": "2.9.8",
+      "homepage": "https://deno.com/",
+      "license": "MIT",
+      "archive": {
+        "url": "https://github.com/denoland/deno/releases/download/v2.9.8/deno-x86_64-pc-windows-msvc.zip",
+        "sha256": "cba84b26e0df5ae7f74fc66b86a95b866872a86292ebd84fa1e959927edd93bf"
+      },
+      "files": [
+        {
+          "name": "deno.exe",
+          "archive_path": "deno.exe",
+          "sha256": "924397800533d3eb0ed0c889b20ad70e18b970d93acd8135bc043f425e528266"
+        }
+      ],
+      "license_file": {
+        "name": "LICENSE.md",
+        "url": "https://raw.githubusercontent.com/denoland/deno/v2.9.8/LICENSE.md",
+        "sha256": "f62497fffecc0852960c8d3e6934b9db86d16396e9b604072e923892cae3a588"
+      }
+    },
+    {
+      "name": "ffmpeg",
+      "version": "2026-10-22-git-bf0e831606",
+      "homepage": "https://www.gyan.dev/ffmpeg/builds/",
+      "license": "GPL-3.0",
+      "archive": {
+        "url": "https://github.com/GyanD/codexffmpeg/releases/download/2026-10-22-git-bf0e831606/ffmpeg-2026-10-22-git-bf0e831606-essentials_build.zip",
+        "sha256": "07de5469e123c02e06959cbf7cc9e405c29f0530abde67f0721fe57dfe5e1fb4"
+      },
+      "files": [
+        {
+          "name": "ffmpeg.exe",
+          "archive_path": "ffmpeg-2026-10-22-git-bf0e831606-essentials_build/bin/ffmpeg.exe",
+          "sha256": "966294d1e6c44e98c523f0c0e93d0c7f2a9c682d4b990621dd0b8aa7ab6228f3"
+        },
+        {
+          "name": "ffprobe.exe",
+          "archive_path": "ffmpeg-2026-10-22-git-bf0e831606-essentials_build/bin/ffprobe.exe",
+          "sha256": "da7eb154f65dbd312174ac7f3637926e2c807a3ff2ce5c36a6db1aa3a5538ad3"
+        }
+      ],
+      "license_file": {
+        "name": "LICENSE.txt",
+        "archive_path": "ffmpeg-2026-10-22-git-bf0e831606-essentials_build/LICENSE",
+        "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      }
+    }
+  ]
+}

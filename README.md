@@ -4,32 +4,34 @@ A Windows GUI for managing saved Spotify playlist profiles and downloading track
 
 ## Features
 
-- Save multiple playlist profiles, each with a Spotify URL, destination folder, and thread count.
+- Save multiple playlist profiles, each with a Spotify URL, destination folder, audio format, bitrate and number of download threads.
 - Create, duplicate, edit, and delete profiles.
-- Store configuration persistently in the current user's application-data directory.
-- View spotDL output live in the application.
-- Start and stop the spotDL worker process.
-- Skip existing files and scan the destination for songs when running spotDL.
-- Dark interface built with PySide6.
+- View spotDL output live, with a progress bar and a track counter; Stop ends every process it started.
+- Check existing files before downloading, and download again those that are truncated or below the selected bitrate.
+- Use another search result when a YouTube video is age restricted or unavailable.
+- Light and dark themes.
 
-## Requirements
+See `CHANGELOG.md` for the changes of each version. The current version is shown in the window title and in **Help → About**.
+
+## Download
+
+Prebuilt Windows releases are on the repository's [Releases page](../../releases). Download `SpotifyDownloader-<version>-win64.zip`, check it against the `.sha256` file if you wish, extract it to a user-writable folder (for example under Documents) and run `SpotifyDownloader.exe`.
+
+## Requirements to build from source
 
 - Windows 10 or Windows 11
-- Python 3.10+ compatible with the selected spotDL release
-- Deno, FFmpeg, and FFprobe Windows executables
+- Python 3.10
+- Internet access to download the vendor executables
 
 ## Prepare the vendor directory
 
-Create a `vendor` directory next to `app.py` and place these files in it:
+The external executables (Deno, FFmpeg and FFprobe) are not stored in the repository. Download them with:
 
-```text
-vendor/
-├── deno.exe
-├── ffmpeg.exe
-└── ffprobe.exe
+```powershell
+.\fetch_vendor.ps1
 ```
 
-Download Deno from the [official Deno website](https://deno.com/). Download FFmpeg and FFprobe from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) or another trusted Windows build provider. Extract the FFmpeg archive and copy `ffmpeg.exe` and `ffprobe.exe` from its `bin` directory into `vendor/`. Review the applicable licenses and redistribution requirements before distributing these binaries.
+`vendor.json` pins the exact version and download URL of each one, with the SHA-256 of the archive, of each executable and of its license. The script downloads only what is missing or different, checks every hash, stops without changing anything on a mismatch, and saves the licenses in `vendor\licenses\`. `build.ps1` runs it automatically. To upgrade a component, update its version, URLs and all its hashes in `vendor.json`, and `THIRD_PARTY_NOTICES.md`.
 
 ## Create a virtual environment on Windows
 
@@ -80,7 +82,7 @@ Use **File → Show configuration location** in the app to display the full path
 
 ## Build a Windows executable
 
-Ensure the three files are present in `vendor/`, then run from the project directory:
+From the project directory:
 
 ```powershell
 .\build.ps1
@@ -88,11 +90,14 @@ Ensure the three files are present in `vendor/`, then run from the project direc
 
 If PowerShell blocks the script, run `powershell -ExecutionPolicy Bypass -File .\build.ps1` instead. The script uses `venv\` or `.venv\` (or the interpreter given with `-Python`) and:
 
-1. checks that `vendor\deno.exe`, `ffmpeg.exe` and `ffprobe.exe` exist and run;
-2. checks that the installed packages match `requirements.txt`, then runs the tests (`-SkipTests` skips them);
-3. keeps `config.json` and `spotify_cache.json` from the previous build, which PyInstaller would otherwise delete, and puts them back after the build (a copy is left in the temp folder if the build fails);
-4. runs PyInstaller;
-5. checks the output and runs the packaged worker's self-check (`SpotifyDownloader.exe --self-check`), which imports spotDL and applies the worker patches without downloading anything.
+1. reads the version from `version.py` and checks that `CHANGELOG.md` has a section for it;
+2. downloads or checks the vendor executables with `fetch_vendor.ps1`;
+3. checks that the installed packages match `requirements.txt`, then runs the tests (`-SkipTests` skips them);
+4. keeps `config.json` and `spotify_cache.json` from the previous build, which PyInstaller would otherwise delete, and puts them back after the build (a copy is left in the temp folder if the build fails);
+5. runs PyInstaller, with the version in the executable's file properties;
+6. adds `LICENSE`, `CHANGELOG.md`, `THIRD_PARTY_NOTICES.md` and the third-party license texts (`licenses\`) next to the executable;
+7. checks the output and runs the packaged worker's self-check (`SpotifyDownloader.exe --self-check`), which imports spotDL and applies the worker patches without downloading anything;
+8. with `-Package`, writes the release archive `dist\SpotifyDownloader-<version>-win64.zip` and its `.sha256`. The archive never contains `config.json` or the Spotify cache.
 
 The executable is created at:
 
@@ -100,12 +105,24 @@ The executable is created at:
 dist\SpotifyDownloader\SpotifyDownloader.exe
 ```
 
+## Publish a release
+
+1. Set the new version in `version.py`, following [Semantic Versioning](https://semver.org/).
+2. In `CHANGELOG.md`, move the entries of `[Unreleased]` to a new `## [X.Y.Z] - YYYY-MM-DD` section.
+3. Commit, then create and push a matching tag:
+
+   ```powershell
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+
+The `Release` GitHub Actions workflow (`.github/workflows/release.yml`) then builds on Windows with `build.ps1 -Package`, checks that the tag matches `version.py`, and publishes a GitHub Release with the zip, its SHA-256 and the changelog section as release notes. The workflow can also be run by hand from the Actions tab: it then only builds the archive and keeps it as a downloadable artifact.
+
 The GUI uses a child process to run spotDL and capture its output. The child process re-launches the packaged executable in worker mode, so do not remove the worker dispatch in `app.py`.
 
 ## Troubleshooting
 
-- **Missing FFmpeg:** check that `vendor\ffmpeg.exe` exists and that the filename is exact.
-- **Missing Deno:** check `vendor\deno.exe`. Some spotDL features may require it.
+- **Missing or damaged FFmpeg or Deno:** run `.\fetch_vendor.ps1` (add `-Force` to download them again).
 - **YouTube HTTP 403 or rate limiting:** these are external-source or extractor errors rather than necessarily build errors. Wait before retrying and consider using fewer threads.
 - **Profiles missing after a rebuild:** build with `build.ps1`, which keeps `config.json`; a build run by hand with `--clean` deletes the output folder and the files in it.
 - **Build fails at the self-check:** a module is missing from the build, or an installed package no longer matches what the worker patches. Reinstall with `python -m pip install -r requirements.txt`.
@@ -113,4 +130,4 @@ The GUI uses a child process to run spotDL and capture its output. The child pro
 
 ## Licensing and responsible use
 
-spotDL, FFmpeg, FFprobe, Deno, and the Python dependencies have their own licenses and redistribution conditions. Check the official license files before distributing the application or bundled binaries. Users are responsible for complying with the terms of Spotify and any audio source used, and for downloading only content they are authorized to access.
+This project is released under the MIT License (`LICENSE`). The packaged application also contains spotDL, yt-dlp, Qt for Python, FFmpeg (GPL-3.0), Deno and other packages under their own licenses: see `THIRD_PARTY_NOTICES.md` and the `licenses` folder of a build. Users are responsible for complying with the terms of Spotify and any audio source used, and for downloading only content they are authorized to access.

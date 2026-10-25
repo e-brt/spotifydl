@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from config_manager import DEFAULT_BITRATE, DEFAULT_FORMAT, load_config, save_config, config_path
 from process_control import ProcessTree, is_file_in_use
+from version import __version__
 from worker import BITRATES, FORMATS, LOSSLESS_FORMATS, PROGRESS_PREFIX
 
 
@@ -286,7 +287,7 @@ def run_spotdl_worker():
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(APP_NAME)
+        self.setWindowTitle(f"{APP_NAME} {__version__}")
         self.resize(1100, 820)
 
         self.config = load_config()
@@ -326,10 +327,13 @@ class MainWindow(QMainWindow):
         outer.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         header = QHBoxLayout()
-        title_box = QVBoxLayout()
+        title_box = QHBoxLayout()
         title = QLabel(APP_NAME)
         title.setObjectName("appTitle")
         title_box.addWidget(title)
+        version_label = QLabel(f"v{__version__}")
+        version_label.setObjectName("hint")
+        title_box.addWidget(version_label, alignment=Qt.AlignmentFlag.AlignBottom)
         header.addLayout(title_box)
         header.addStretch()
         self.theme_switch = ThemeSwitch()
@@ -510,6 +514,11 @@ class MainWindow(QMainWindow):
             theme_group.addAction(action)
             theme_menu.addAction(action)
             self.theme_actions[name] = action
+
+        help_menu = self.menuBar().addMenu("Help")
+        about_action = QAction(f"About {APP_NAME}", self)
+        about_action.triggered.connect(self._show_about)
+        help_menu.addAction(about_action)
 
     def _set_theme(self, name, save=True):
         """Apply a theme to the whole window, and save it as the user's choice."""
@@ -992,6 +1001,9 @@ class MainWindow(QMainWindow):
     def _show_config_location(self):
         QMessageBox.information(self, "Configuration file", f"Your profiles are stored here:\n{config_path()}")
 
+    def _show_about(self):
+        QMessageBox.about(self, f"About {APP_NAME}", about_text())
+
     def closeEvent(self, event):
         if self.process and self.process.state() != QProcess.ProcessState.NotRunning:
             answer = QMessageBox.question(
@@ -1016,6 +1028,23 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
+def about_text():
+    """Rich text for Help → About: versions, license and where to find more."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        spotdl_version = version("spotdl")
+    except PackageNotFoundError:
+        spotdl_version = "unknown"
+    return (
+        f"<h3>{APP_NAME}</h3>"
+        f"<p>Version {__version__}<br>spotDL {spotdl_version}</p>"
+        "<p>Released under the MIT License.</p>"
+        "<p>Bundled software (spotDL, yt-dlp, Qt for Python, FFmpeg, Deno) keeps its own "
+        "license: see THIRD_PARTY_NOTICES.md next to the executable.</p>"
+    )
+
+
 def config_manager_new_id():
     import uuid
     return uuid.uuid4().hex[:12]
@@ -1032,6 +1061,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+    app.setApplicationVersion(__version__)
 
     icon_path = resource_path("assets", "spotifydownloader.ico")
     icon = QIcon(str(icon_path))
