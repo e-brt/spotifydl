@@ -14,6 +14,9 @@ version that has no section here.
   run, with the tracks in the playlist order.
 - After a complete run, files of tracks no longer in the playlist can be moved
   to the Recycle Bin, after confirmation.
+- When a run ends while the window is in the background, the taskbar button
+  flashes and a Windows notification gives a summary.
+- A Retry failed button downloads again only the tracks that failed.
 
 ### Changed
 - The code is in `src\`; run it from source with `python src\main.py`.

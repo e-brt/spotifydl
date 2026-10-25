@@ -90,7 +90,7 @@ def run_progress():
             time.sleep(600)
         time.sleep(0.15)
         print(f'Downloaded "Track {index}"', flush=True)
-        emit("track", ok=ok, name=f"Track {index}")
+        emit("track", ok=ok, name=f"Track {index}", url=f"https://open.spotify.com/track/T{index}")
 
 
 def run_cleanup():

@@ -2,7 +2,7 @@
 
 import time
 
-from PySide6.QtCore import Qt, QProcess, QTemporaryDir
+from PySide6.QtCore import QEvent, Qt, QProcess, QTemporaryDir
 from PySide6.QtGui import QAction, QActionGroup, QFont
 from PySide6.QtWidgets import (
     QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLayout, QLineEdit,
@@ -45,6 +45,12 @@ class MainWindow(ProfilesMixin, DownloadsMixin, QMainWindow):
         self._failed_tracks = []
         # Files the worker suggests moving to the Recycle Bin (cleanup event).
         self._cleanup = {}
+        # Spotify URLs of the tracks that failed in the last run, for Retry.
+        self._failed_urls = []
+        # JSON file listing the tracks to retry, while a retry runs.
+        self._retry_file = None
+        # Notification area icon, created for the first notification.
+        self._tray = None
         # Arrow images used by the stylesheet, deleted when the window closes.
         self._arrow_dir = QTemporaryDir()
 
@@ -186,7 +192,8 @@ class MainWindow(ProfilesMixin, DownloadsMixin, QMainWindow):
         self.stop_button = QPushButton("■  Stop")
         self.stop_button.setEnabled(False)
         self.save_button.clicked.connect(self._save_current_profile)
-        self.start_button.clicked.connect(self._start_download)
+        # clicked passes a "checked" argument, which _start_download must not get.
+        self.start_button.clicked.connect(lambda: self._start_download())
         self.stop_button.clicked.connect(self._stop_download)
         self.start_button.setObjectName("primaryButton")
         self.stop_button.setObjectName("stopButton")
@@ -205,8 +212,13 @@ class MainWindow(ProfilesMixin, DownloadsMixin, QMainWindow):
         self.log_state = QLabel("Waiting for a download")
         self.clear_logs_button = QPushButton("Clear logs")
         self.clear_logs_button.clicked.connect(self._clear_logs)
+        self.retry_button = QPushButton("Retry failed")
+        self.retry_button.setToolTip("Download again only the tracks that failed in the last run.")
+        self.retry_button.clicked.connect(self._retry_failed)
+        self.retry_button.setVisible(False)
         log_toolbar.addWidget(self.log_state)
         log_toolbar.addStretch()
+        log_toolbar.addWidget(self.retry_button)
         log_toolbar.addWidget(self.clear_logs_button)
         logs_layout.addLayout(log_toolbar)
 
@@ -287,6 +299,13 @@ class MainWindow(ProfilesMixin, DownloadsMixin, QMainWindow):
 
     def _show_about(self):
         QMessageBox.about(self, f"About {APP_NAME}", about_text())
+
+    def changeEvent(self, event):
+        # The notification icon is only needed until the window is used again.
+        if (event.type() == QEvent.Type.ActivationChange and self.isActiveWindow()
+                and self._tray is not None):
+            self._tray.hide()
+        super().changeEvent(event)
 
     def closeEvent(self, event):
         if self.process and self.process.state() != QProcess.ProcessState.NotRunning:

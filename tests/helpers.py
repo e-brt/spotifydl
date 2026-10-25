@@ -6,6 +6,7 @@ Spotify cache are never read or written, and nothing is downloaded.
 """
 
 import ctypes
+import json
 import os
 import re
 import sys
@@ -67,8 +68,16 @@ class AppTestCase(unittest.TestCase):
 
         test = self
 
+        self.started_args = []
+        self.retried_urls = None
+
         class FakeWorkerProcess(QProcess):
             def start(self, program, args):
+                # Keep what the real worker would have received.
+                test.started_args = list(args)
+                if "--only-tracks" in args:
+                    retry_file = args[args.index("--only-tracks") + 1]
+                    test.retried_urls = json.loads(Path(retry_file).read_text(encoding="utf-8"))
                 super().start(sys.executable, [str(FAKE_WORKER), test.mode])
 
         for target, attribute, value in [

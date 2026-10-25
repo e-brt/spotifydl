@@ -61,7 +61,7 @@ def emit(event, **data):
     Events, in order:
     - phase: phase="fetching" | "checking" (total=...) | "downloading"
     - total: total tracks and how many are already up to date ("done")
-    - track: one download finished, ok=True/False, name=...
+    - track: one download finished, ok=True/False, name=..., url=... (Spotify)
     - cleanup: at the end of a complete run, files the user may want to move
       to the Recycle Bin: removed=[...] (tracks no longer in the playlist),
       paths relative to the destination folder
@@ -372,10 +372,16 @@ def track_downloads(downloader, blocked_videos):
                 error for error in downloader.errors
                 if not any(blocked in error for blocked in blocked_urls)
             ]
-        emit("track", ok=path is not None, name=result_song.display_name)
+        emit("track", ok=path is not None, name=result_song.display_name, url=song.url)
         return result_song, path
 
     downloader.async_search_and_download = tracked_search_and_download
+
+
+def select_tracks(songs, urls):
+    """The songs whose Spotify track is in urls, in playlist order."""
+    wanted = {spotify_track_id(url) for url in urls}
+    return [song for song in songs if spotify_track_id(song.url) in wanted]
 
 
 def playlist_file_name(list_name):
@@ -491,6 +497,9 @@ def parse_options(argv):
     parser.add_argument("--format", choices=FORMATS, default="mp3")
     parser.add_argument("--bitrate", choices=BITRATES, default="128k")
     parser.add_argument("--threads", type=int, default=1)
+    # JSON file listing the Spotify track URLs to download, out of the
+    # playlist: used to retry the tracks that failed.
+    parser.add_argument("--only-tracks")
     return parser.parse_args(argv)
 
 
@@ -555,6 +564,15 @@ def run(argv):
         album_type=settings["album_type"],
         playlist_retain_track_cover=settings["playlist_retain_track_cover"],
     )
+    playlist_name = songs[0].list_name if songs else None
+    # A retry only handles some tracks: the playlist file and the removed
+    # tracks would then be wrong, so they are left for complete runs.
+    complete_run = not options.only_tracks
+    if not complete_run:
+        wanted = json.loads(Path(options.only_tracks).read_text(encoding="utf-8"))
+        total_in_playlist = len(songs)
+        songs = select_tracks(songs, wanted)
+        print(f"[Retry] Retrying {len(songs)} of {total_in_playlist} tracks.", flush=True)
 
     emit("phase", phase="checking", total=len(songs))
     print(f"[Check] Fetching track details with {CHECK_THREADS} threads...", flush=True)
@@ -629,8 +647,11 @@ def run(argv):
     downloader.progress_handler.close()
     spotify_cache.save()
 
+    if not complete_run:
+        return
+
     # Downloaded tracks are at their expected name; a failed one has no file.
-    playlist_path = Path(playlist_file_name(songs[0].list_name if songs else None))
+    playlist_path = Path(playlist_file_name(playlist_name))
     count = write_playlist_file(playlist_path, songs, track_files)
     print(f"[Sync] Playlist file {playlist_path} written with {count} of {len(songs)} tracks.", flush=True)
 

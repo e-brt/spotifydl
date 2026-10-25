@@ -5,12 +5,13 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from functools import partial
 from pathlib import Path
 
 from PySide6.QtCore import QProcess, QProcessEnvironment, QTimer
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from config_manager import DEFAULT_BITRATE, DEFAULT_FORMAT
 from process_control import ProcessTree, is_file_in_use
@@ -32,10 +33,27 @@ LOG_COLUMNS = 300
 TRAILING_SPACES = re.compile(r"[ \t]+(?=\r?\n|\Z)")
 
 
+def completion_message(progress):
+    """Summary of a finished run for the notification, from the progress
+    counters (see DownloadsMixin._handle_progress_event)."""
+    total = progress.get("total")
+    if total is None:
+        return "The download finished."
+    failed = progress.get("failed", 0)
+    up_to_date = progress.get("up_to_date", 0)
+    downloaded = max(progress.get("done", 0) - up_to_date - failed, 0)
+    parts = [f"{downloaded} downloaded", f"{up_to_date} already up to date"]
+    if failed:
+        parts.append(f"{failed} failed")
+    return f"{total} tracks: " + ", ".join(parts) + "."
+
+
 class DownloadsMixin:
     """Download handling of MainWindow (see main_window.py)."""
 
-    def _start_download(self):
+    def _start_download(self, only_tracks=None):
+        """Download the selected profile's playlist, or only the given Spotify
+        track URLs of it (to retry the tracks that failed)."""
         if self.process and self.process.state() != QProcess.ProcessState.NotRunning:
             return
         self._save_current_profile()
@@ -67,6 +85,14 @@ class DownloadsMixin:
             "--bitrate", profile.get("bitrate", DEFAULT_BITRATE),
             "--threads", str(profile.get("threads", 1)),
         ]
+        self._remove_retry_file()
+        if only_tracks:
+            # In a file: the list can be longer than a command line allows.
+            handle, path = tempfile.mkstemp(prefix="spotifydl-retry-", suffix=".json")
+            with os.fdopen(handle, "w", encoding="utf-8") as file:
+                json.dump(list(only_tracks), file)
+            self._retry_file = Path(path)
+            args += ["--only-tracks", path]
 
         process = QProcess(self)
         process.setWorkingDirectory(str(destination))
@@ -106,13 +132,37 @@ class DownloadsMixin:
         if quality not in LOSSLESS_FORMATS:
             quality += f", {profile.get('bitrate', DEFAULT_BITRATE)}"
         self.logs.appendPlainText(f"> Quality: {quality}")
-        self.logs.appendPlainText(f"> Download threads: {profile.get('threads', 1)}\n")
+        self.logs.appendPlainText(f"> Download threads: {profile.get('threads', 1)}")
+        if only_tracks:
+            self.logs.appendPlainText(f"> Retrying {len(only_tracks)} failed track(s)")
+        self.logs.appendPlainText("")
         self.log_state.setText("Starting…")
         self._reset_progress()
         self.status_label.setText("Running")
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
+        self._update_retry_button()
         process.start(program, process_args)
+
+    def _retry_failed(self):
+        """Download again only the tracks that failed in the last run."""
+        if self._failed_urls:
+            self._start_download(only_tracks=list(self._failed_urls))
+
+    def _update_retry_button(self):
+        running = self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning
+        count = len(self._failed_urls)
+        self.retry_button.setText(f"Retry failed ({count})")
+        self.retry_button.setVisible(count > 0)
+        self.retry_button.setEnabled(count > 0 and not running)
+
+    def _remove_retry_file(self):
+        if self._retry_file is not None:
+            try:
+                self._retry_file.unlink()
+            except OSError:
+                pass
+            self._retry_file = None
 
     def _process_started(self, process):
         if process is not self.process:
@@ -164,11 +214,13 @@ class DownloadsMixin:
             self.log_state.setText("Process crashed")
             self.status_label.setText("Error")
             self.logs.appendPlainText("[Application] spotDL worker crashed.")
+            self._notify("Download failed", "The spotDL worker crashed. See the logs for details.")
 
         elif exit_code == 0:
             self.log_state.setText("Download finished")
             self.status_label.setText("Completed")
             self.logs.appendPlainText("[Application] Download process finished.")
+            self._notify("Download finished", completion_message(self._progress))
             self._offer_cleanup()
 
         else:
@@ -177,14 +229,18 @@ class DownloadsMixin:
             self.logs.appendPlainText(
                 f"[Application] spotDL exited with code {exit_code}."
             )
+            self._notify("Download failed", f"spotDL exited with code {exit_code}. See the logs for details.")
 
         self.stop_requested = False
         self.process = None
+        self._remove_retry_file()
+        self._update_retry_button()
         process.deleteLater()
 
     def _reset_progress(self):
-        self._progress = {"total": None, "done": 0, "failed": 0}
+        self._progress = {"total": None, "done": 0, "failed": 0, "up_to_date": 0}
         self._failed_tracks = []
+        self._failed_urls = []
         self._cleanup = {}
         # Indeterminate until the worker reports the number of tracks.
         self.progress_bar.setRange(0, 0)
@@ -209,12 +265,15 @@ class DownloadsMixin:
         elif kind == "total":
             progress["total"] = int(event.get("total", 0))
             progress["done"] = int(event.get("done", 0))
+            progress["up_to_date"] = progress["done"]
             self._update_progress()
         elif kind == "track" and progress["total"] is not None:
             progress["done"] += 1
             if not event.get("ok", False):
                 progress["failed"] += 1
                 self._failed_tracks.append(str(event.get("name", "unknown track")))
+                if event.get("url"):
+                    self._failed_urls.append(str(event["url"]))
             self._update_progress()
         elif kind == "cleanup":
             self._cleanup = event
@@ -230,6 +289,29 @@ class DownloadsMixin:
         if failed:
             text += f" · {failed} failed"
         self.progress_label.setText(text)
+
+    def _notify(self, title, message):
+        """Tell the user a download ended, when the window is in the background:
+        the taskbar button flashes and a Windows notification is shown."""
+        if self.isActiveWindow():
+            return
+        QApplication.alert(self)
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        if self._tray is None:
+            self._tray = QSystemTrayIcon(self.windowIcon(), self)
+            self._tray.setToolTip(self.windowTitle())
+            self._tray.messageClicked.connect(self._bring_to_front)
+            self._tray.activated.connect(lambda reason: self._bring_to_front())
+        # The icon is only in the notification area until the window is used
+        # again (see MainWindow.changeEvent).
+        self._tray.show()
+        self._tray.showMessage(title, message, self.windowIcon(), 10000)
+
+    def _bring_to_front(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
 
     def _offer_cleanup(self):
         """After a complete run, offer to move the files of tracks no longer in
@@ -295,6 +377,8 @@ class DownloadsMixin:
             self.stop_requested = False
             self.process = None
             process.deleteLater()
+            self._remove_retry_file()
+            self._update_retry_button()
         elif not (self.stop_requested and error == QProcess.ProcessError.Crashed):
             # A crash is expected when the user stopped the worker.
             self.logs.appendPlainText(f"[Application] Worker error: {process.errorString()}")
