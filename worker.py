@@ -16,6 +16,8 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -42,6 +44,12 @@ BLOCKED_VIDEO_ERRORS = re.compile(
 )
 # How many other search results to try after a blocked video.
 MAX_ALTERNATIVE_RESULTS = 3
+# Spotify data cached between runs (see SpotifyCache), stored next to the
+# configuration file: beside the executable, or beside app.py from source.
+CACHE_FILENAME = "spotify_cache.json"
+TRACK_CACHE_DAYS = 30
+SPOTIFY_TRACK_URL = re.compile(r"open\.spotify\.com/(?:intl-[\w-]+/)?track/(\w+)")
+WEB_PLAYER_HASH = re.compile(r'"\w+","(?:query|mutation)","[0-9a-f]{64}"')
 # Output lines starting with this prefix carry a JSON progress event for the
 # GUI instead of a log message.
 PROGRESS_PREFIX = "@@progress "
@@ -148,6 +156,117 @@ def share_spotify_web_session():
 
     for method, names in steps.items():
         shared(method, names)
+
+
+class SpotifyCache:
+    """Spotify data kept between runs, so repeated runs on the same playlist
+    cost almost no requests and do not get the IP rate limited (HTTP 429).
+
+    Holds each track's metadata for TRACK_CACHE_DAYS days, and the Spotify web
+    player query hashes for as long as the web player build does not change.
+    A missing or damaged file is simply treated as an empty cache.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self.lock = threading.Lock()
+        self.changed = False
+        self.data = {"tracks": {}, "web_hashes": None}
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and isinstance(loaded.get("tracks"), dict):
+                self.data.update(loaded)
+        except (OSError, ValueError):
+            pass
+
+    def get_track(self, track_id):
+        entry = self.data["tracks"].get(track_id)
+        if entry and time.time() - entry.get("fetched", 0) < TRACK_CACHE_DAYS * 86400:
+            return entry.get("data")
+        return None
+
+    def put_track(self, track_id, data):
+        with self.lock:
+            self.data["tracks"][track_id] = {"fetched": time.time(), "data": data}
+            self.changed = True
+
+    def get_web_hashes(self, js_pack):
+        entry = self.data.get("web_hashes")
+        if isinstance(entry, dict) and entry.get("js_pack") == js_pack:
+            return entry.get("hashes")
+        return None
+
+    def put_web_hashes(self, js_pack, hashes):
+        with self.lock:
+            self.data["web_hashes"] = {"js_pack": js_pack, "hashes": hashes}
+            self.changed = True
+
+    def save(self):
+        with self.lock:
+            if not self.changed:
+                return
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                temp_path = self.path.with_suffix(".tmp")
+                temp_path.write_text(json.dumps(self.data), encoding="utf-8")
+                temp_path.replace(self.path)
+                self.changed = False
+            except OSError as exc:
+                print(f"[Cache] Could not save the Spotify cache: {exc}", flush=True)
+
+
+def spotify_track_id(url):
+    """Return the track id of a Spotify track URL, or None."""
+    match = SPOTIFY_TRACK_URL.search(url or "")
+    return match.group(1) if match else None
+
+
+def cache_spotify_lookups(cache):
+    """Serve track metadata and web player hashes from the cache when possible.
+
+    Must be called before share_spotify_web_session, which then shares the
+    cached hashes between clients like freshly downloaded ones.
+    """
+    from spotapi.client import BaseClient
+    from spotapi.types.alias import _Undefined
+    from spotdl.types.song import Song
+
+    original_from_url = Song.from_url.__func__
+
+    def from_url(cls, url):
+        track_id = spotify_track_id(url)
+        data = cache.get_track(track_id) if track_id else None
+        if data is not None:
+            try:
+                return cls(**data)
+            except TypeError:
+                # Saved by a spotDL version with other fields: fetch it again.
+                pass
+        song = original_from_url(cls, url)
+        if track_id:
+            cache.put_track(track_id, song.json)
+        return song
+
+    Song.from_url = classmethod(from_url)
+
+    original_hashes = BaseClient.get_sha256_hash
+
+    def get_sha256_hash(self):
+        if self.js_pack is _Undefined:
+            self.get_session()
+        js_pack = str(self.js_pack)
+        hashes = cache.get_web_hashes(js_pack)
+        if hashes:
+            self.raw_hashes = hashes
+            return
+        original_hashes(self)
+        # Keep only the "name","query|mutation","sha256" entries spotapi looks up.
+        hashes = ",".join(WEB_PLAYER_HASH.findall(str(self.raw_hashes)))
+        if hashes:
+            self.raw_hashes = hashes
+            cache.put_web_hashes(js_pack, hashes)
+
+    BaseClient.get_sha256_hash = get_sha256_hash
 
 
 def video_id(url):
@@ -309,6 +428,10 @@ def run(argv):
 
     hide_child_consoles()
     use_english_youtube_music()
+    from config_manager import config_dir
+
+    spotify_cache = SpotifyCache(config_dir() / CACHE_FILENAME)
+    cache_spotify_lookups(spotify_cache)
     share_spotify_web_session()
     blocked_videos = skip_blocked_videos()
 
@@ -409,6 +532,8 @@ def run(argv):
         flush=True,
     )
     emit("total", total=len(songs), done=up_to_date)
+    # Saved now so that a stopped run keeps what it fetched.
+    spotify_cache.save()
 
     if to_download:
         track_downloads(downloader, blocked_videos)
@@ -417,3 +542,4 @@ def run(argv):
               f"{settings['threads']} thread(s)...", flush=True)
         downloader.download_multiple_songs(to_download)
     downloader.progress_handler.close()
+    spotify_cache.save()
