@@ -10,13 +10,13 @@ from PySide6.QtWidgets import (
     QSpinBox, QSplitter, QVBoxLayout, QWidget,
 )
 
-from config_manager import config_path, load_config, logs_dir
+from config_manager import config_dir, config_path, load_config, logs_dir
 from downloads import PARTIAL_DELETE_ATTEMPTS, PARTIAL_DELETE_RETRY_MS, STOP_TIMEOUT_MS, DownloadsMixin
 from profiles import ProfilesMixin
 from theme import DEFAULT_THEME, STYLESHEET, THEMES, make_arrow_images
 from version import __version__
 from widgets import LogView, ThemeSwitch
-from worker import BITRATES, FORMATS
+from worker import BITRATES, CACHE_FILENAME, FORMATS
 
 APP_NAME = "Spotify Playlist Downloader"
 MIN_WINDOW_WIDTH = 850
@@ -266,6 +266,9 @@ class MainWindow(ProfilesMixin, DownloadsMixin, QMainWindow):
         open_config_action = QAction("Show configuration location", self)
         open_config_action.triggered.connect(self._show_config_location)
         file_menu.addAction(open_config_action)
+        show_cache_action = QAction("Show cache location", self)
+        show_cache_action.triggered.connect(self._show_cache_location)
+        file_menu.addAction(show_cache_action)
         open_logs_action = QAction("Open logs folder", self)
         open_logs_action.triggered.connect(self._open_logs_folder)
         file_menu.addAction(open_logs_action)
@@ -315,6 +318,9 @@ class MainWindow(ProfilesMixin, DownloadsMixin, QMainWindow):
     def _show_config_location(self):
         QMessageBox.information(self, "Configuration file", f"Your profiles are stored here:\n{config_path()}")
 
+    def _show_cache_location(self):
+        QMessageBox.information(self, "Spotify cache", cache_location_text(config_dir() / CACHE_FILENAME))
+
     def _open_logs_folder(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(logs_dir())))
 
@@ -351,6 +357,16 @@ class MainWindow(ProfilesMixin, DownloadsMixin, QMainWindow):
         self._release_process_tree()
         self.logs.detach_file()
         event.accept()
+
+
+def cache_location_text(path):
+    """Text for File → Show cache location."""
+    state = "" if path.is_file() else "\n\nIt does not exist yet: the first download creates it."
+    return (
+        f"Spotify track data is cached here:\n{path}\n\n"
+        "It saves Spotify requests on the next runs. It can be deleted at any time; "
+        "it is rebuilt on the next download." + state
+    )
 
 
 def about_text():

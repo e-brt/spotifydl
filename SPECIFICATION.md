@@ -38,7 +38,7 @@ src\                 application code (run from source: python src\main.py)
   worker.py          the spotDL worker process
   theme.py, widgets.py, config_manager.py, process_control.py,
   recycle_bin.py, resources.py, version.py
-tests\               unittest suite (87 tests, about 80 s, no network)
+tests\               unittest suite (90 tests, about 80 s, no network)
 tools\               collect_licenses.py (build)
 assets\              application icon
 build.ps1            build, test and package
@@ -278,7 +278,8 @@ with a real download, whenever one of these packages is upgraded.
 ### 5.2 Spotify cache
 
 spotDL's own cache only works with the official Spotify API, so the worker
-keeps `data\spotify_cache.json`:
+keeps `data\spotify_cache.json` (**File → Show cache location** shows its
+path):
 - **track metadata** (`Song.from_url`), per Spotify track id, for
   `TRACK_CACHE_DAYS` (30) days;
 - **web player query hashes**, until Spotify deploys a new web player build
@@ -334,7 +335,7 @@ archive never contains them.
 
 ### 7.2 Tests
 
-`python -m unittest discover -s tests`: 87 tests, about 80 s, no network. The
+`python -m unittest discover -s tests`: 90 tests, about 80 s, no network. The
 GUI tests run the real window with a fake worker (`tests\fake_worker.py`), an
 in-memory configuration and a temporary folder. They cover Stop and Close
 (Windows process tree, partial file), progress, end of run (retry,

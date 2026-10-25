@@ -104,7 +104,7 @@ Make sure the application folder is writable. If it is installed under a protect
 
 Use **File → Show configuration location** in the app to display the full path. Back up `config.json` to preserve your saved profiles.
 
-`spotify_cache.json`, in the same folder, keeps Spotify track data between runs so that repeated downloads of the same playlist do not get rate limited by Spotify. It can be deleted at any time; it is rebuilt on the next run.
+`spotify_cache.json`, in the same folder, keeps Spotify track data between runs so that repeated downloads of the same playlist do not get rate limited by Spotify. It can be deleted at any time; it is rebuilt on the next run. **File → Show cache location** displays its full path.
 
 ## Build a Windows executable
 
