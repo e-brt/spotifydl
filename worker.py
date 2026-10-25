@@ -12,6 +12,7 @@ as a library so that it can:
 
 import argparse
 import concurrent.futures
+import json
 import os
 import sys
 from pathlib import Path
@@ -30,6 +31,22 @@ BITRATE_TOLERANCE = 0.9
 BITRATE_TOLERANCE_BY_FORMAT = {"opus": 0.65}
 # A file shorter than this fraction of the track is considered incomplete.
 MIN_DURATION_RATIO = 0.75
+# Output lines starting with this prefix carry a JSON progress event for the
+# GUI instead of a log message.
+PROGRESS_PREFIX = "@@progress "
+
+
+def emit(event, **data):
+    """Send a progress event to the GUI.
+
+    Events, in order:
+    - phase: phase="fetching" | "checking" (total=...) | "downloading"
+    - total: total tracks and how many are already up to date ("done")
+    - track: one download finished, ok=True/False, name=...
+    """
+    # A single write, so log lines from other threads cannot split the event.
+    sys.stdout.write(PROGRESS_PREFIX + json.dumps({"event": event, **data}) + "\n")
+    sys.stdout.flush()
 
 
 def hide_child_consoles():
@@ -209,6 +226,7 @@ def run(argv):
 
     SpotifyClient.init(**spotify_settings)
 
+    emit("phase", phase="fetching")
     songs = get_simple_songs(
         [options.url],
         use_ytm_data=settings["ytm_data"],
@@ -218,6 +236,7 @@ def run(argv):
         playlist_retain_track_cover=settings["playlist_retain_track_cover"],
     )
 
+    emit("phase", phase="checking", total=len(songs))
     print(f"[Check] Fetching track details with {CHECK_THREADS} threads...", flush=True)
 
     def complete(song):
@@ -271,8 +290,20 @@ def run(argv):
         f"(format {options.format}, bitrate {bitrate}).",
         flush=True,
     )
+    emit("total", total=len(songs), done=up_to_date)
 
     if to_download:
+        # Report each finished download; spotDL returns no path on failure.
+        search_and_download = downloader.async_search_and_download
+
+        async def tracked_search_and_download(song):
+            result_song, path = await search_and_download(song)
+            emit("track", ok=path is not None, name=result_song.display_name)
+            return result_song, path
+
+        downloader.async_search_and_download = tracked_search_and_download
+
+        emit("phase", phase="downloading")
         print(f"[Download] Downloading {len(to_download)} tracks with "
               f"{settings['threads']} thread(s)...", flush=True)
         downloader.download_multiple_songs(to_download)

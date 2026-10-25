@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import sys
@@ -11,12 +12,12 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QLineEdit,
     QSpinBox, QComboBox, QPlainTextEdit, QFileDialog, QMessageBox, QFormLayout,
-    QSplitter, QGroupBox, QStatusBar, QInputDialog
+    QSplitter, QGroupBox, QStatusBar, QInputDialog, QProgressBar
 )
 
 from config_manager import DEFAULT_BITRATE, DEFAULT_FORMAT, load_config, save_config, config_path
 from process_control import ProcessTree, is_file_in_use
-from worker import BITRATES, FORMATS, LOSSLESS_FORMATS
+from worker import BITRATES, FORMATS, LOSSLESS_FORMATS, PROGRESS_PREFIX
 
 
 APP_NAME = "Spotify Playlist Downloader"
@@ -65,6 +66,9 @@ class MainWindow(QMainWindow):
         self._partial_files = []
         # Incomplete last line of output, per worker process.
         self._output_tails = {}
+        # Processed tracks: up to date, downloaded or failed.
+        self._progress = {"total": None, "done": 0, "failed": 0}
+        self._failed_tracks = []
 
         self._build_ui()
         self._apply_theme()
@@ -213,6 +217,21 @@ class MainWindow(QMainWindow):
         log_toolbar.addStretch()
         log_toolbar.addWidget(self.clear_logs_button)
         logs_layout.addLayout(log_toolbar)
+
+        progress_row = QHBoxLayout()
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(10)
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(0)
+        self.progress_label = QLabel("")
+        self.progress_label.setObjectName("hint")
+        self.progress_label.setToolTip(
+            "Processed tracks: already up to date, downloaded, or failed."
+        )
+        progress_row.addWidget(self.progress_bar, 1)
+        progress_row.addWidget(self.progress_label)
+        logs_layout.addLayout(progress_row)
         self.logs = QPlainTextEdit()
         self.logs.setReadOnly(True)
         self.logs.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
@@ -248,6 +267,8 @@ class MainWindow(QMainWindow):
             QPushButton#stopButton { background: #7c3038; border-color: #93404a; color: white; font-weight: 600; }
             QPushButton#stopButton:hover { background: #99404a; }
             QPushButton#stopButton:pressed { background: #60232a; border-style: inset; }
+            QProgressBar { background: #0f1116; border: 1px solid #343a46; border-radius: 5px; }
+            QProgressBar::chunk { background: #4f6bed; border-radius: 4px; }
             QPushButton#primaryButton:disabled, QPushButton#stopButton:disabled { background: #20232a; border-color: #2b303b; color: #666e7b; font-weight: 600; }
             QStatusBar { color: #9ba5b5; }
             QSplitter::handle { background: #262b35; width: 2px; }
@@ -464,7 +485,8 @@ class MainWindow(QMainWindow):
             quality += f", {profile.get('bitrate', DEFAULT_BITRATE)}"
         self.logs.appendPlainText(f"> Quality: {quality}")
         self.logs.appendPlainText(f"> Download threads: {profile.get('threads', 1)}\n")
-        self.log_state.setText("Downloading…")
+        self.log_state.setText("Starting…")
+        self._reset_progress()
         self.status_label.setText("Running")
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
@@ -487,6 +509,13 @@ class MainWindow(QMainWindow):
                 self._output_tails[process] = data[end:]
             data = data[:end]
         text = TRAILING_SPACES.sub("", data.decode("utf-8", errors="replace"))
+        shown = []
+        for line in text.splitlines(keepends=True):
+            if not line.startswith(PROGRESS_PREFIX):
+                shown.append(line)
+            elif process is self.process:
+                self._handle_progress_event(line[len(PROGRESS_PREFIX):])
+        text = "".join(shown)
         if text:
             self.logs.moveCursor(self.logs.textCursor().MoveOperation.End)
             self.logs.insertPlainText(text)
@@ -499,6 +528,7 @@ class MainWindow(QMainWindow):
             return
         self._cancel_stop_timer()
         self._release_process_tree()
+        self._end_progress()
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
 
@@ -529,6 +559,63 @@ class MainWindow(QMainWindow):
         self.process = None
         process.deleteLater()
 
+    def _reset_progress(self):
+        self._progress = {"total": None, "done": 0, "failed": 0}
+        self._failed_tracks = []
+        # Indeterminate until the worker reports the number of tracks.
+        self.progress_bar.setRange(0, 0)
+        self.progress_label.setText("")
+
+    def _handle_progress_event(self, payload):
+        try:
+            event = json.loads(payload)
+            kind = event["event"]
+        except (ValueError, KeyError, TypeError):
+            return
+        progress = self._progress
+        if kind == "phase":
+            phase = event.get("phase")
+            if phase == "fetching":
+                self.log_state.setText("Fetching playlist…")
+            elif phase == "checking":
+                self.log_state.setText("Checking existing tracks…")
+                self.progress_label.setText(f"{event.get('total', '?')} tracks")
+            elif phase == "downloading":
+                self.log_state.setText("Downloading…")
+        elif kind == "total":
+            progress["total"] = int(event.get("total", 0))
+            progress["done"] = int(event.get("done", 0))
+            self._update_progress()
+        elif kind == "track" and progress["total"] is not None:
+            progress["done"] += 1
+            if not event.get("ok", False):
+                progress["failed"] += 1
+                self._failed_tracks.append(str(event.get("name", "unknown track")))
+            self._update_progress()
+
+    def _update_progress(self):
+        total, done, failed = (self._progress[key] for key in ("total", "done", "failed"))
+        done = min(done, total)
+        # An empty playlist counts as complete.
+        self.progress_bar.setRange(0, max(total, 1))
+        self.progress_bar.setValue(done if total else 1)
+        percent = done * 100 // total if total else 100
+        text = f"{done} / {total} tracks · {percent}%"
+        if failed:
+            text += f" · {failed} failed"
+        self.progress_label.setText(text)
+
+    def _end_progress(self):
+        # Keep the last known progress; only stop an indeterminate animation.
+        if self.progress_bar.maximum() == 0:
+            self.progress_bar.setRange(0, 1)
+            self.progress_bar.setValue(0)
+        if self._failed_tracks:
+            self.logs.appendPlainText(
+                f"[Application] {len(self._failed_tracks)} track(s) failed:\n  - "
+                + "\n  - ".join(self._failed_tracks)
+            )
+
     def _process_error(self, process, error):
         if process is not self.process:
             return
@@ -537,6 +624,7 @@ class MainWindow(QMainWindow):
             self.logs.appendPlainText(f"[Application] Could not start spotDL worker: {process.errorString()}")
             self._cancel_stop_timer()
             self._release_process_tree()
+            self._end_progress()
             self.start_button.setEnabled(True)
             self.stop_button.setEnabled(False)
             self.status_label.setText("Error")
