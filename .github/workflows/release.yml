@@ -6,6 +6,8 @@
 # - Running the workflow by hand (Actions > Release > Run workflow) only
 #   builds the archive and keeps it as a downloadable workflow artifact.
 name: Release
+# Title of each run in the Actions tab, instead of the last commit message.
+run-name: ${{ github.ref_type == 'tag' && format('Release {0}', github.ref_name) || format('Build from {0}', github.ref_name) }}
 
 on:
   push:
