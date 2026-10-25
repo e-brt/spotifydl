@@ -9,6 +9,8 @@ version that has no section here.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-25
+
 ### Added
 - A `.m3u8` playlist file is written in the destination folder after each
   run, with the tracks in the playlist order.
