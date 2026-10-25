@@ -48,6 +48,17 @@ class PlaylistFileTests(unittest.TestCase):
             "#EXTINF:200,Artist - First", str(Path("sub/first.mp3")),
         ])
 
+    def test_older_copies_in_another_format(self):
+        songs = [Song("A", "First"), Song("B", "Second"), Song("C", "Third")]
+        for name in ("first.m4a", "first.mp3", "first.opus", "second.mp3", "third.m4a"):
+            (self.dir / name).write_bytes(b"x")
+        files = {songs[0].url: self.dir / "first.m4a",
+                 songs[1].url: self.dir / "second.m4a",   # not downloaded in m4a yet
+                 songs[2].url: self.dir / "third.m4a"}
+        copies = worker.find_other_format_copies(songs, files, "m4a")
+        self.assertEqual(copies, [self.dir / "first.mp3", self.dir / "first.opus"],
+                         "second.mp3 is the only copy of its track and must be kept")
+
     def test_removed_tracks_are_files_whose_track_left_the_playlist(self):
         (self.dir / "kept.mp3").write_bytes(b"x")
         (self.dir / "gone.mp3").write_bytes(b"x")
@@ -95,6 +106,21 @@ class CleanupDialogTests(AppTestCase):
         self.assertEqual(self.recycled, [])
         self.assertTrue((self.out / "Old Track.mp3").exists())
         self.assertIn("Kept 1 file(s) no longer in the playlist", self.window.logs.toPlainText())
+
+    def test_each_kind_of_file_is_asked_separately(self):
+        answers = iter([False, True])  # keep the removed tracks, recycle the old copies
+
+        def confirm(title, text, question, names):
+            self.questions.append((title, names))
+            return next(answers)
+        self.window._confirm_cleanup = confirm
+        self.run_to_end("cleanup-both")
+        self.assertEqual(self.questions, [("Tracks removed from the playlist", ["Old Track.mp3"]),
+                                          ("Older copies in another format", ["Song.mp3"])])
+        self.assertEqual(self.recycled, [self.out / "Song.mp3"])
+        logs = self.window.logs.toPlainText()
+        self.assertIn("Kept 1 file(s) no longer in the playlist", logs)
+        self.assertIn("Moved 1 file(s) to the Recycle Bin", logs)
 
     def test_no_question_when_there_is_nothing_to_clean(self):
         self.answer(True)

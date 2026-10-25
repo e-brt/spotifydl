@@ -33,6 +33,19 @@ LOG_COLUMNS = 300
 TRAILING_SPACES = re.compile(r"[ \t]+(?=\r?\n|\Z)")
 
 
+# What the worker's cleanup event may list, and how to ask about it:
+# (event key, dialog title, text, what the log says was kept).
+CLEANUP_QUESTIONS = [
+    ("removed", "Tracks removed from the playlist",
+     "{count} file(s) in the destination folder are no longer in this playlist.",
+     "file(s) no longer in the playlist"),
+    ("other_formats", "Older copies in another format",
+     "{count} track(s) also have an older copy in another audio format, next to "
+     "the file in the format selected now.",
+     "older copy(ies) in another format"),
+]
+
+
 def completion_message(progress):
     """Summary of a finished run for the notification, from the progress
     counters (see DownloadsMixin._handle_progress_event)."""
@@ -314,26 +327,29 @@ class DownloadsMixin:
         self.activateWindow()
 
     def _offer_cleanup(self):
-        """After a complete run, offer to move the files of tracks no longer in
-        the playlist to the Recycle Bin. Nothing is moved without confirmation."""
-        removed = [str(path) for path in (self._cleanup or {}).get("removed") or []]
-        if not removed or self._download_destination is None:
+        """After a complete run, offer to move to the Recycle Bin the files of
+        tracks no longer in the playlist, then the older copies of tracks in
+        another audio format. Nothing is moved without confirmation."""
+        if self._download_destination is None:
             return
-        files = [self._download_destination / path for path in removed]
-        if not self._confirm_cleanup(
-            "Tracks removed from the playlist",
-            f"{len(files)} file(s) in the destination folder are no longer in this playlist.",
-            "Move them to the Recycle Bin? You can restore them from there.",
-            removed,
-        ):
-            self.logs.appendPlainText(f"[Application] Kept {len(files)} file(s) no longer in the playlist.")
-            return
-        failed = move_to_recycle_bin(files)
-        self.logs.appendPlainText(
-            f"[Application] Moved {len(files) - len(failed)} file(s) to the Recycle Bin."
-        )
-        for path in failed:
-            self.logs.appendPlainText(f"[Application] Could not move to the Recycle Bin: {path}")
+        for key, title, text, kept in CLEANUP_QUESTIONS:
+            names = [str(path) for path in (self._cleanup or {}).get(key) or []]
+            if not names:
+                continue
+            files = [self._download_destination / name for name in names]
+            if not self._confirm_cleanup(
+                title, text.format(count=len(files)),
+                "Move them to the Recycle Bin? You can restore them from there.",
+                names,
+            ):
+                self.logs.appendPlainText(f"[Application] Kept {len(files)} {kept}.")
+                continue
+            failed = move_to_recycle_bin(files)
+            self.logs.appendPlainText(
+                f"[Application] Moved {len(files) - len(failed)} file(s) to the Recycle Bin."
+            )
+            for path in failed:
+                self.logs.appendPlainText(f"[Application] Could not move to the Recycle Bin: {path}")
 
     def _confirm_cleanup(self, title, text, question, names):
         """Ask before moving files to the Recycle Bin; names are listed in the

@@ -10,7 +10,7 @@ A Windows GUI for managing saved Spotify playlist profiles and downloading track
 - Check existing files before downloading, and download again those that are truncated or below the selected bitrate.
 - Use another search result when a YouTube video is age restricted or unavailable.
 - A Windows notification when a download ends in the background, and a **Retry failed** button for the tracks that failed.
-- Keep the folder in sync with the playlist: a `.m3u8` playlist file in the playlist order, and an offer to move the tracks removed from the playlist to the Recycle Bin.
+- Keep the folder in sync with the playlist: a `.m3u8` playlist file in the playlist order, and an offer to move to the Recycle Bin the tracks removed from the playlist and, after a format change, the older copies in the previous format.
 - Light and dark themes.
 
 See `CHANGELOG.md` for the changes of each version. The current version is shown in the window title and in **Help → About**.

@@ -21,6 +21,8 @@ Clean-up:
 - cleanup: a complete run that reports "Old Track.mp3" (created in the
   destination folder) as no longer in the playlist.
 - cleanup-none: a complete run with nothing to clean up.
+- cleanup-both: also reports "Song.mp3" (created) as an older copy in
+  another format.
 """
 
 import json
@@ -95,15 +97,19 @@ def run_progress():
 
 def run_cleanup():
     emit("total", total=1, done=1)
-    removed = []
-    if mode == "cleanup":
+    removed, other_formats = [], []
+    if mode in ("cleanup", "cleanup-both"):
         with open("Old Track.mp3", "wb") as old:
             old.write(b"old")
         removed = ["Old Track.mp3"]
-    emit("cleanup", removed=removed)
+    if mode == "cleanup-both":
+        with open("Song.mp3", "wb") as copy:
+            copy.write(b"old format")
+        other_formats = ["Song.mp3"]
+    emit("cleanup", removed=removed, other_formats=other_formats)
 
 
-if mode in ("cleanup", "cleanup-none"):
+if mode in ("cleanup", "cleanup-none", "cleanup-both"):
     run_cleanup()
     sys.exit(0)
 if mode == "quick-ok":

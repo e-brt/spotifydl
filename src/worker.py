@@ -63,8 +63,9 @@ def emit(event, **data):
     - total: total tracks and how many are already up to date ("done")
     - track: one download finished, ok=True/False, name=..., url=... (Spotify)
     - cleanup: at the end of a complete run, files the user may want to move
-      to the Recycle Bin: removed=[...] (tracks no longer in the playlist),
-      paths relative to the destination folder
+      to the Recycle Bin: removed=[...] (tracks no longer in the playlist)
+      and other_formats=[...] (older copies in another audio format), paths
+      relative to the destination folder
     """
     # A single write, so log lines from other threads cannot split the event.
     sys.stdout.write(PROGRESS_PREFIX + json.dumps({"event": event, **data}) + "\n")
@@ -418,6 +419,24 @@ def find_removed_tracks(known_songs, songs):
     return sorted({Path(path) for path in removed}, key=lambda path: str(path).lower())
 
 
+def find_other_format_copies(songs, files, audio_format):
+    """Copies of the songs in another audio format, next to their file in the
+    selected format (same name, other extension), sorted. Only songs whose
+    file in the selected format exists are considered, so an older copy is
+    never the only one."""
+    copies = []
+    for song in songs:
+        file = files.get(song.url)
+        if file is None or not Path(file).is_file():
+            continue
+        for other in FORMATS:
+            if other != audio_format:
+                copy = Path(file).with_suffix(f".{other}")
+                if copy.is_file():
+                    copies.append(copy)
+    return sorted(set(copies), key=lambda path: str(path).lower())
+
+
 def bitrate_to_bps(bitrate):
     """Return "320k" as 320000, or None for "auto"."""
     if bitrate.endswith("k") and bitrate[:-1].isdigit():
@@ -660,4 +679,11 @@ def run(argv):
         print(f"[Sync] {len(removed)} file(s) in this folder are no longer in the playlist:", flush=True)
         for path in removed:
             print(f"  - {path}", flush=True)
-    emit("cleanup", removed=[str(path) for path in removed])
+
+    other_formats = find_other_format_copies(songs, track_files, options.format)
+    if other_formats:
+        print(f"[Sync] {len(other_formats)} track(s) also have an older copy in another format:", flush=True)
+        for path in other_formats:
+            print(f"  - {path}", flush=True)
+    emit("cleanup", removed=[str(path) for path in removed],
+         other_formats=[str(path) for path in other_formats])
